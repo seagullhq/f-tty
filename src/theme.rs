@@ -1,11 +1,11 @@
-//! Token del design system: flat, compatto, angoli arrotondati, un solo accento.
+//! Design system tokens: flat, compact, rounded corners, single accent.
 //!
-//! La chrome è una superficie unica; il terminale è una "card" arrotondata
-//! staccata di pochi pixel dai bordi. Niente gradienti, ombre o blur.
+//! Chrome is a single surface; the terminal is a rounded "card" a few pixels
+//! away from the edges. No gradients, shadows or blur.
 
 use gpui::{Pixels, px};
 
-// Superfici
+// Surfaces
 pub const CHROME: u32 = 0x262626;
 pub const HOVER: u32 = 0x303030;
 pub const ACTIVE: u32 = 0x343434;
@@ -13,11 +13,11 @@ pub const BORDER: u32 = 0x3a3a3a;
 pub const DANGER: u32 = 0xc42b1c;
 pub const SELECTION: u32 = 0x264f78;
 
-// Testo
+// Text
 pub const MUTED: u32 = 0x9a9a9a;
 pub const ACCENT: u32 = 0x4ec9b0;
 
-// Misure compatte
+// Compact measurements
 pub const BAR_HEIGHT: Pixels = px(34.);
 pub const BAR_PADDING: Pixels = px(6.);
 pub const GAP: Pixels = px(4.);
@@ -30,7 +30,7 @@ pub const CONTROL_SIZE: Pixels = px(24.);
 pub const CONTROL_GAP: Pixels = px(2.);
 pub const CONTENT_PADDING: Pixels = px(6.);
 
-// Raggi
+// Radii
 pub const WINDOW_RADIUS: Pixels = px(12.);
 pub const SURFACE_RADIUS: Pixels = px(8.);
 pub const CONTROL_RADIUS: Pixels = px(6.);

@@ -20,7 +20,7 @@ panic = "abort"
 debug = false
 strip = true
 
-# Il binario di sviluppo non serve per distribuire: niente debug info,
-# così target/ non esplode e le build restano più leggere.
+# Development binary is not for distribution: no debug info, so target/
+# does not balloon and builds stay lighter.
 [profile.dev]
 debug = 0

@@ -1,29 +1,29 @@
 # f-tty
 
-Terminale GPU compatto scritto in Rust con [GPUI](https://gpui.rs).
+A compact GPU terminal written in Rust with [GPUI](https://gpui.rs).
 
 ![Screenshot](docs/screenshot.png)
 
-## Caratteristiche
+## Features
 
-- Tab multiple, ognuna con PTY ed emulatore VTE indipendenti.
-- Tab list configurabile su **alto, basso, sinistra o destra**.
-- Impostazioni dentro l'area del terminale, senza occupare una tab.
-- Selezione del testo col mouse e copia con `Ctrl+Shift+C`.
-- Scrollback di 2.000 righe per tab: rotella del mouse e `Shift+PageUp` / `Shift+PageDown`.
-- Griglia e PTY ridimensionati in base allo spazio reale della finestra (SIGWINCH).
-- Shell rilevate automaticamente (`/etc/shells` su Unix, `COMSPEC`/PATH su Windows).
-- Barra del titolo custom: controlli tondi su Linux, caption a piena altezza su Windows, traffic lights native su macOS.
-- Tema scuro flat, angoli arrotondati, UI in italiano.
+- Multiple tabs, each with its own PTY and VTE emulator.
+- Tab list position: **top, bottom, left or right**.
+- Settings inside the terminal area, without taking up a tab.
+- Mouse text selection and copy with `Ctrl+Shift+C`.
+- 2,000-line scrollback per tab: mouse wheel and `Shift+PageUp` / `Shift+PageDown`.
+- Grid and PTY resized to the actual window space (SIGWINCH).
+- Automatic shell detection (`/etc/shells` on Unix, `COMSPEC`/PATH on Windows).
+- Custom title bar: round controls on Linux, full-height captions on Windows, native traffic lights on macOS.
+- Flat dark theme, rounded corners, English UI.
 
-## Requisiti
+## Requirements
 
-- Rust stable recente (edition 2024).
-- **Linux**: driver Vulkan e librerie di sviluppo per fontconfig, freetype, xkbcommon e Wayland/X11.
+- Recent stable Rust (edition 2024).
+- **Linux**: Vulkan driver and development libraries for fontconfig, freetype, xkbcommon and Wayland/X11.
   - Debian/Ubuntu: `sudo apt install gcc g++ clang cmake pkg-config libfontconfig-dev libfreetype-dev libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev libvulkan-dev libvulkan1`
   - Fedora: `sudo dnf install gcc-c++ clang cmake pkg-config fontconfig-devel freetype-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libX11-devel libxcb-devel vulkan-devel`
-- **Windows**: toolchain Rust MSVC con Visual Studio Build Tools (oppure toolchain GNU con MinGW); serve un compilatore C per le dipendenze.
-- **macOS**: Xcode e Command Line Tools.
+- **Windows**: Rust MSVC toolchain with Visual Studio Build Tools (or GNU toolchain with MinGW); a C compiler is required for dependencies.
+- **macOS**: Xcode and Command Line Tools.
 
 ## Build
 
@@ -32,25 +32,25 @@ cargo build --release
 ./target/release/ftty
 ```
 
-## Scorciatoie
+## Shortcuts
 
-| Azione | Tasto |
+| Action | Key |
 | --- | --- |
-| Nuova tab | `Ctrl+Shift+T` |
-| Chiudi tab | `Ctrl+Shift+W` |
-| Tab successiva / precedente | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
-| Copia selezione | `Ctrl+Shift+C` |
-| Scorri lo storico | rotella, `Shift+PageUp` / `Shift+PageDown` |
-| Torna al presente | digita un tasto o scorri fino in fondo |
-| Apri/chiudi impostazioni | pulsante ingranaggio |
+| New tab | `Ctrl+Shift+T` |
+| Close tab | `Ctrl+Shift+W` |
+| Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
+| Copy selection | `Ctrl+Shift+C` |
+| Scroll history | mouse wheel, `Shift+PageUp` / `Shift+PageDown` |
+| Back to the present | type a key or scroll to the bottom |
+| Open/close settings | gear button |
 
-## Stato
+## Status
 
-Testato su Linux (KDE Wayland). Il codice per Windows è stato verificato con
-`cargo check --target x86_64-pc-windows-gnu`, ma l'app non è ancora stata
-eseguita su hardware Windows; macOS non è stato verificato.
+Tested on Linux (KDE Wayland). The Windows code has been checked with
+`cargo check --target x86_64-pc-windows-gnu`, but the app has not been run on
+Windows hardware yet; macOS has not been verified.
 
-## Licenza
+## License
 
-Le icone in `assets/icons/` sono Heroicons, licenza MIT (vedi
-`assets/icons/LICENSE`). La licenza del progetto non è ancora stata scelta.
+The icons in `assets/icons/` are Heroicons, MIT licensed (see
+`assets/icons/LICENSE`). The project license has not been chosen yet.

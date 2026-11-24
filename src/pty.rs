@@ -25,7 +25,7 @@ impl Pty {
 
         let (tx, rx) = channel();
         thread::spawn(move || {
-            // Buffer grande: meno syscall e meno messaggi nel canale.
+            // Large buffer: fewer syscalls and channel messages.
             let mut buf = vec![0u8; 64 * 1024];
             loop {
                 match reader.read(&mut buf) {
@@ -51,7 +51,7 @@ impl Pty {
         self.writer.flush()
     }
 
-    /// Aggiorna il winsize del PTY: il kernel manda SIGWINCH alla shell.
+    /// Updates the PTY winsize: the kernel sends SIGWINCH to the shell.
     pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.master.resize(PtySize {
             rows,

@@ -3,8 +3,8 @@ use vte::{Params, Parser, Perform};
 
 pub const DEFAULT_FG: u32 = 0xd4d4d4;
 pub const DEFAULT_BG: u32 = 0x1e1e1e;
-/// Righe di storico per tab: abbastanza per risalire nei log senza far
-/// crescere troppo la RAM (~2 MB/tab a 80 colonne).
+/// History lines per tab: enough to go back through logs without growing
+/// RAM too much (~2 MB/tab at 80 columns).
 pub const MAX_SCROLLBACK: usize = 2_000;
 
 const ANSI16: [u32; 16] = [
@@ -77,12 +77,12 @@ impl Default for Cell {
 pub struct Term {
     pub cols: usize,
     pub rows: usize,
-    /// Schermo come buffer piatto: riga r, colonna c -> cells[r * cols + c]
+    /// Screen as a flat buffer: row r, column c -> cells[r * cols + c]
     pub cells: Vec<Cell>,
-    /// (riga, colonna)
+    /// (row, column)
     pub cursor: (usize, usize),
     pub cursor_visible: bool,
-    /// Righe uscite dallo schermo, dalla più vecchia alla più recente.
+    /// Lines that left the screen, oldest to newest.
     scrollback: VecDeque<Box<[Cell]>>,
     style: Style,
     saved_cursor: (usize, usize),
@@ -112,8 +112,8 @@ impl Term {
         self.scrollback.len()
     }
 
-    /// Riga del buffer combinato: 0 = più vecchia nello scrollback,
-    /// history_len = prima riga dello schermo.
+    /// Combined buffer line: 0 = oldest in scrollback, history_len = first
+    /// screen row.
     pub fn line(&self, index: usize) -> &[Cell] {
         let history = self.scrollback.len();
         if index < history {
@@ -126,7 +126,7 @@ impl Term {
         }
     }
 
-    /// Prima riga visibile quando si è risaliti di `scroll` righe.
+    /// First visible line after scrolling back by `scroll` lines.
     pub fn visible_top(&self, scroll: usize) -> usize {
         let history = self.scrollback.len();
         history - scroll.min(history)
@@ -263,7 +263,7 @@ fn raw(params: &Params, i: usize) -> u16 {
         .unwrap_or(0)
 }
 
-/// Parametro con default quando è 0 o assente.
+/// Parameter with a default when 0 or missing.
 fn arg(params: &Params, i: usize, default: usize) -> usize {
     match raw(params, i) {
         0 => default,
@@ -297,7 +297,7 @@ impl Perform for Term {
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         if !intermediates.is_empty() {
-            // Modalità private: ESC[?25h / ESC[?25l per il cursore
+            // Private mode: ESC[?25h / ESC[?25l for the cursor
             if intermediates.first() == Some(&b'?') && (action == 'h' || action == 'l') {
                 for p in params.iter() {
                     if p.first() == Some(&25) {
@@ -346,7 +346,7 @@ impl Perform for Term {
     }
 }
 
-/// Emulatore completo: parser + stato del terminale.
+/// Full emulator: parser + terminal state.
 pub struct Emulator {
     parser: Parser,
     pub term: Term,

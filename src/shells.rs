@@ -1,13 +1,13 @@
-//! Rilevamento delle shell disponibili nel sistema (Linux, macOS, Windows).
+//! Detects the shells available on the system (Linux, macOS, Windows).
 
 #[cfg(unix)]
 use std::path::Path;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Shell {
-    /// Nome mostrato nel menu.
+    /// Name shown in the menu.
     pub name: String,
-    /// Programma passato al PTY (path assoluto o comando nel PATH).
+    /// Program passed to the PTY (absolute path or PATH command).
     pub program: String,
 }
 
@@ -50,7 +50,7 @@ pub fn default_shell(shells: &[Shell]) -> Option<Shell> {
 fn unix_shells() -> Vec<Shell> {
     let mut programs = Vec::new();
 
-    // La shell corrente va per prima, così è anche il default del menu.
+    // Current shell goes first, so it's also the menu default.
     if let Some(shell) = std::env::var_os("SHELL") {
         let program = shell.to_string_lossy().into_owned();
         if !program.is_empty() && Path::new(&program).is_file() {
@@ -128,9 +128,9 @@ fn unique(programs: Vec<String>) -> Vec<Shell> {
     let mut seen: Vec<std::path::PathBuf> = Vec::new();
     let mut shells: Vec<Shell> = Vec::new();
     for program in programs {
-        // Risolve i symlink di directory (/bin -> /usr/bin) ma non il file:
-        // /bin/sh e /bin/bash restano due shell distinte anche se il binario
-        // è lo stesso (sh parte in modalità POSIX).
+        // Resolve directory symlinks (/bin -> /usr/bin) but not the file:
+        // /bin/sh and /bin/bash stay distinct shells even if the binary is
+        // the same (sh starts in POSIX mode).
         let path = Path::new(&program);
         let key = match (path.parent(), path.file_name()) {
             (Some(parent), Some(name)) => std::fs::canonicalize(parent)
