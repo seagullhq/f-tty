@@ -1,4 +1,4 @@
-//! Asset incorporati (Heroicons, licenza MIT in assets/icons/LICENSE).
+//! Embedded assets (Heroicons, MIT license in assets/icons/LICENSE).
 
 use gpui::{AssetSource, Result, SharedString};
 use std::borrow::Cow;

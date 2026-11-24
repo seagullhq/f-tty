@@ -21,15 +21,15 @@ const FONT: &str = if cfg!(windows) {
 const COLS: usize = 80;
 const ROWS: usize = 24;
 const WINDOW_SIZE: Size<Pixels> = size(px(696.), px(608.));
-/// Floor della finestra: sotto la dimensione che mostra le 80×24 il terminale
-/// viene ritagliato, ma resta ridimensionabile.
+/// Window floor: below the size that shows 80×24 the terminal is clipped,
+/// but the window stays resizable.
 const MIN_WINDOW_SIZE: Size<Pixels> = size(px(320.), px(200.));
 
 fn color_of(c: u32) -> Hsla {
     rgb(c).into()
 }
 
-/// Icona Heroicons monocolore, tinta col colore del tema.
+/// Monochrome Heroicons icon, tinted with the theme color.
 fn icon(path: &'static str, size: f32, color: u32) -> Svg {
     svg()
         .path(path)
@@ -68,12 +68,12 @@ struct Tab {
     pty: Option<Pty>,
     emu: Emulator,
     title: String,
-    /// Cambia ad ogni ridimensionamento della griglia: le resize del PTY
-    /// partono solo quando il drag si ferma (l'ultima generazione vince).
+    /// Changes on every grid resize: PTY resizes only start when the drag
+    /// stops (the latest generation wins).
     resize_seq: u64,
-    /// Righe di scrollback mostrate sopra lo schermo (0 = fondo).
+    /// Scrollback lines shown above the screen (0 = bottom).
     scroll: usize,
-    /// Accumulatore per i delta frazionari del touchpad.
+    /// Accumulator for fractional touchpad deltas.
     scroll_acc: f32,
 }
 
@@ -131,9 +131,9 @@ impl TerminalView {
         window.set_window_title("ftty");
 
         let shells = shells::available();
-        let shell = shells::default_shell(&shells).expect("nessuna shell disponibile");
+        let shell = shells::default_shell(&shells).expect("no shell available");
 
-        // Un solo timer per la pompa dell'output: niente thread UI bloccati.
+        // Single timer for pumping output: no blocked UI threads.
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor()
@@ -164,7 +164,7 @@ impl TerminalView {
         } else {
             px(1.)
         };
-        // TextStyle::default() usa phi() = 1.618034.
+        // TextStyle::default() uses phi() = 1.618034.
         let line_height = font_size * 1.618034;
 
         Self {
@@ -183,8 +183,8 @@ impl TerminalView {
         }
     }
 
-    /// Cambia lato alla tab list mantenendo il terminale della stessa misura:
-    /// la finestra cresce/cala dello spazio occupato dalla barra.
+    /// Changes the tab list side while keeping the terminal the same size:
+    /// the window grows/shrinks by the space taken by the bar.
     fn set_tab_position(
         &mut self,
         position: TabPosition,
@@ -217,7 +217,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Consuma i chunk di tutte le tab e notifica solo se cambia quella attiva.
+    /// Drains chunks from all tabs and notifies only if the active one changed.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let mut active_received = false;
         for (i, tab) in self.tabs.iter_mut().enumerate() {
@@ -244,7 +244,7 @@ impl TerminalView {
             }
             let added = tab.emu.term.history_len() - history_before;
             if tab.scroll > 0 && added > 0 {
-                // Il testo sotto gli occhi resta fermo mentre arriva output.
+                // The text in view stays put while output arrives.
                 tab.scroll = (tab.scroll + added).min(tab.emu.term.history_len());
             }
             if received && i == self.active {
@@ -266,7 +266,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Mostra/nasconde le impostazioni nello spazio del terminale.
+    /// Shows/hides settings in the terminal area.
     fn toggle_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = !self.settings_open;
         self.selection = None;
@@ -274,7 +274,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Imposta la shell usata dalle nuove tab.
+    /// Sets the shell used by new tabs.
     fn select_shell(&mut self, shell: Shell, cx: &mut Context<Self>) {
         self.shell = shell;
         cx.notify();
@@ -309,7 +309,7 @@ impl TerminalView {
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
 
-        // Scorciatoie tab (non vanno inviate alla shell).
+        // Tab shortcuts (not sent to the shell).
         if ks.modifiers.control {
             if ks.modifiers.shift {
                 match ks.key.as_str() {
@@ -362,7 +362,7 @@ impl TerminalView {
 
         if let Some(b) = bytes {
             if let Some(tab) = self.tabs.get_mut(self.active) {
-                // Digitare riporta sempre al presente.
+                // Typing always jumps back to the present.
                 tab.scroll = 0;
                 tab.scroll_acc = 0.;
                 if let Some(pty) = &mut tab.pty {
@@ -401,9 +401,9 @@ impl TerminalView {
         )
     }
 
-    /// Allinea la griglia allo spazio disponibile; il PTY riceve SIGWINCH
-    /// solo quando il ridimensionamento si ferma, per non ridisegnare la
-    /// shell a ogni pixel durante il drag.
+    /// Aligns the grid to the available space; the PTY receives SIGWINCH
+    /// only when resizing stops, to avoid redrawing the shell on every
+    /// pixel during the drag.
     fn resize_active_terminal(&mut self, cols: usize, rows: usize, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
@@ -436,7 +436,7 @@ impl TerminalView {
         }
     }
 
-    /// Righe positive = risali nello storico, negative = torni al presente.
+    /// Positive lines = go back in history, negative = return to the present.
     fn scroll_active(&mut self, lines: f32, cx: &mut Context<Self>) {
         if self.settings_open {
             return;
@@ -546,7 +546,7 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Intervallo lineare [start, end) della selezione.
+    /// Linear range [start, end) of the selection.
     fn selection_range(&self) -> Option<(usize, usize)> {
         let selection = self.selection?;
         let cols = self.tabs[self.active].emu.term.cols;
@@ -555,8 +555,8 @@ impl TerminalView {
         Some((a.min(b), a.max(b) + 1))
     }
 
-    /// Evidenzia la selezione con rettangoli traslucidi sopra al testo: il
-    /// layout del testo non cambia, quindi il drag resta fluido.
+    /// Highlights the selection with translucent rectangles above the text:
+    /// text layout does not change, so dragging stays smooth.
     fn selection_overlays(&self, term: &Term) -> Vec<Div> {
         let Some((start, end)) = self.selection_range() else {
             return Vec::new();
@@ -601,8 +601,8 @@ impl TerminalView {
     }
 }
 
-/// Applica un delta in righe (positivo = indietro) tenendo i resti
-/// frazionari del touchpad; il risultato è sempre dentro lo storico.
+/// Applies a delta in lines (positive = back), keeping touchpad fractional
+/// remainders; the result is always within the history.
 fn apply_scroll(scroll: usize, history: usize, delta: f32, acc: &mut f32) -> usize {
     let total = *acc + delta;
     let whole = total.trunc();
@@ -610,8 +610,8 @@ fn apply_scroll(scroll: usize, history: usize, delta: f32, acc: &mut f32) -> usi
     (scroll as f32 + whole).clamp(0., history as f32) as usize
 }
 
-/// Testo selezionato tra due celle (estremi inclusi), righe unite da newline
-/// e spazi finali rimossi come fanno i terminali.
+/// Selected text between two cells (inclusive), rows joined by newline and
+/// trailing spaces trimmed like terminals do.
 fn selection_text(term: &Term, anchor: (usize, usize), cursor: (usize, usize)) -> String {
     if term.cols == 0 || term.rows == 0 {
         return String::new();
@@ -643,14 +643,14 @@ fn selection_text(term: &Term, anchor: (usize, usize), cursor: (usize, usize)) -
     text
 }
 
-/// Indice attivo dopo la chiusura di `removed`, con almeno una tab rimasta.
+/// Active index after closing `removed`, with at least one tab left.
 fn active_after_close(active: usize, removed: usize, remaining: usize) -> usize {
     let active = if removed < active { active - 1 } else { active };
     active.min(remaining - 1)
 }
 
-/// Minimo della finestra per il layout corrente: con tab laterali serve più
-/// larghezza, con tab in basso più altezza.
+/// Minimum window size for the current layout: side tabs need more width,
+/// bottom tabs need more height.
 fn layout_min_size(position: TabPosition) -> Size<Pixels> {
     match position {
         TabPosition::Top => MIN_WINDOW_SIZE,
@@ -665,8 +665,8 @@ fn layout_min_size(position: TabPosition) -> Size<Pixels> {
     }
 }
 
-/// Variazione di dimensione della finestra quando la tab list cambia lato,
-/// così il terminale mantiene sempre le stesse colonne/righe.
+/// Window size delta when the tab list changes side, so the terminal keeps
+/// the same columns/rows.
 fn layout_size_delta(old: TabPosition, new: TabPosition) -> (Pixels, Pixels) {
     let width = match (old.vertical(), new.vertical()) {
         (true, false) => -(theme::STRIP_WIDTH + theme::GAP),
@@ -681,7 +681,7 @@ fn layout_size_delta(old: TabPosition, new: TabPosition) -> (Pixels, Pixels) {
     (width, height)
 }
 
-/// Zona invisibile ai bordi: cattura il drag e delega il resize al compositor.
+/// Invisible edge zone: captures the drag and delegates resizing to the compositor.
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 fn resize_handle(zone: Div, edge: ResizeEdge) -> Div {
     zone.on_mouse_down(MouseButton::Left, move |_, window, cx| {
@@ -690,8 +690,8 @@ fn resize_handle(zone: Div, edge: ResizeEdge) -> Div {
     })
 }
 
-/// Su Windows `zoom_window()` massimizza soltanto: per il pulsante "ripristina"
-/// serve SW_RESTORE, non esposto da GPUI.
+/// On Windows `zoom_window()` only maximizes: the "restore" button needs
+/// SW_RESTORE, which GPUI does not expose.
 #[cfg(windows)]
 fn restore_maximized(window: &Window) {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -725,7 +725,7 @@ fn maximize_or_restore(window: &Window) {
     window.zoom_window();
 }
 
-/// Controllo finestra in stile Zed: area cliccabile con hover, senza chrome di sistema.
+/// Zed-style window control: clickable area with hover, no system chrome.
 fn window_control(
     id: &'static str,
     icon: impl IntoElement,
@@ -747,7 +747,7 @@ fn window_control(
         })
         .child(icon);
 
-    // Linux: pulsanti tondi. Windows: caption a tutta altezza e senza gap.
+    // Linux: round buttons. Windows: full-height caption without gaps.
     #[cfg(windows)]
     {
         button.w(px(40.)).h_full()
@@ -768,8 +768,8 @@ struct RunKey {
     bold: bool,
 }
 
-/// Lunghezza da disegnare: gli spazi finali senza stile non vanno impaginati
-/// né dipinti, ma il cursore deve restare visibile anche su una cella vuota.
+/// Length to draw: trailing unstyled spaces should not be laid out or
+/// painted, but the cursor must stay visible even on an empty cell.
 fn line_len(cells: &[Cell], cursor_col: Option<usize>) -> usize {
     let mut len = cells.len();
     while len > 0 {
@@ -783,7 +783,7 @@ fn line_len(cells: &[Cell], cursor_col: Option<usize>) -> usize {
     len
 }
 
-/// Costruisce una riga come un unico testo con run di stile contigui.
+/// Builds a row as a single text with contiguous style runs.
 fn line_from_cells(cells: &[Cell], cursor_col: Option<usize>) -> Div {
     let len = line_len(cells, cursor_col);
 
@@ -837,8 +837,8 @@ fn line_from_cells(cells: &[Cell], cursor_col: Option<usize>) -> Div {
 }
 
 impl TerminalView {
-    /// Barra superiore: brand, tab (se in alto), trascinamento, selettore layout,
-    /// controlli finestra. Le tab attive condividono lo sfondo del terminale.
+    /// Top bar: brand, tabs (if at top), drag area, layout selector, window
+    /// controls. Active tabs share the terminal background.
     fn chrome(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let mut bar = div()
             .h(theme::BAR_HEIGHT)
@@ -854,14 +854,14 @@ impl TerminalView {
                 theme::BAR_PADDING
             });
 
-        // Su Windows il trascinamento passa da WM_NCHITTEST (WindowControlArea),
-        // non dal mouse event del client.
+        // On Windows dragging goes through WM_NCHITTEST (WindowControlArea),
+        // not through client mouse events.
         #[cfg(not(windows))]
         {
             bar = bar.on_mouse_down(MouseButton::Left, |_, window, _| window.start_window_move());
         }
 
-        // macOS: spazio per le traffic light native in alto a sinistra.
+        // macOS: space for the native traffic lights at the top left.
         if cfg!(target_os = "macos") {
             bar = bar.child(div().flex_none().w(px(66.)));
         }
@@ -894,7 +894,7 @@ impl TerminalView {
         }
 
         let right = if cfg!(target_os = "macos") {
-            // Controlli finestra gestiti dal sistema (traffic lights).
+            // Window controls handled by the system (traffic lights).
             div().flex().items_center().child(self.settings_button(cx))
         } else {
             div()
@@ -915,7 +915,7 @@ impl TerminalView {
         .child(right)
     }
 
-    /// Caption buttons: tondi su Linux, a tutta altezza su Windows.
+    /// Caption buttons: round on Linux, full height on Windows.
     fn window_controls(&self, window: &Window) -> impl IntoElement {
         let icon_size = if cfg!(windows) { 12. } else { 11. };
         let (maximize_id, maximize_icon) = if window.is_maximized() {
@@ -952,9 +952,9 @@ impl TerminalView {
             ))
     }
 
-    /// Una tab orizzontale (barra) o verticale (pannello laterale).
+    /// A horizontal tab (bar) or vertical tab (side panel).
     fn tab(&self, i: usize, vertical: bool, cx: &mut Context<Self>) -> impl IntoElement {
-        // Con Settings aperta nessuna tab è attiva: lo spazio è delle impostazioni.
+        // With Settings open no tab is active: the space belongs to settings.
         let active = !self.settings_open && i == self.active;
         let group = format!("tab-{i}");
 
@@ -982,7 +982,7 @@ impl TerminalView {
         let close = if active {
             close
         } else {
-            // Sulle tab inattive la × appare solo passandoci sopra.
+            // On inactive tabs the × only appears on hover.
             close
                 .group_hover(group.clone(), |s| s.opacity(1.))
                 .opacity(0.)
@@ -1062,7 +1062,7 @@ impl TerminalView {
             .child(icon("icons/plus.svg", 12., theme::MUTED))
     }
 
-    /// Apre la tab impostazioni (o la riattiva).
+    /// Opens/closes the settings view.
     fn settings_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let active = self.settings_open;
         div()
@@ -1086,7 +1086,7 @@ impl TerminalView {
             ))
     }
 
-    /// Contenuto della tab impostazioni: posizione tab e shell di default.
+    /// Settings content: tab position and default shell.
     fn settings(&self, cx: &mut Context<Self>) -> Div {
         let mut view = div()
             .flex_1()
@@ -1195,8 +1195,8 @@ impl TerminalView {
         view
     }
 
-    /// Bordi/finestre invisibili per ridimensionare la finestra senza
-    /// decorazioni di sistema (CSD): 6px sui lati, 10px sugli angoli.
+    /// Invisible edges to resize the window without system decorations (CSD):
+    /// 6px on the sides, 10px on the corners.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn resize_zones(&self) -> Div {
         let edge = px(6.);
@@ -1204,8 +1204,8 @@ impl TerminalView {
 
         let mut zones = div().absolute().top(px(0.)).left(px(0.)).size_full();
 
-        // Su Windows i caption button occupano tutto il bordo superiore:
-        // niente zone di resize lì.
+        // On Windows caption buttons take the whole top border: no resize
+        // zones there.
         if !cfg!(windows) {
             zones = zones
                 .child(resize_handle(
@@ -1293,7 +1293,7 @@ impl TerminalView {
             ))
     }
 
-    /// Tab list in basso: chip arrotondate sopra il bordo della finestra.
+    /// Bottom tab list: rounded chips above the window edge.
     fn bottom_tabs(&self, cx: &mut Context<Self>) -> Div {
         let mut row = div().w_full().flex_none().flex().items_center().gap_1();
 
@@ -1304,7 +1304,7 @@ impl TerminalView {
         row.child(self.new_tab_button(cx)).child(div().flex_1())
     }
 
-    /// Tab list laterale verticale, tipo browser, come chip su superficie unica.
+    /// Vertical side tab list, browser style, as chips on a single surface.
     fn side_tabs(&self, cx: &mut Context<Self>) -> Div {
         let mut panel = div()
             .flex_none()
@@ -1363,7 +1363,7 @@ fn section_label(text: &'static str) -> Div {
         .child(text)
 }
 
-/// Icona del selettore: rettangolo con la banda sul lato della tab list.
+/// Selector icon: rectangle with the band on the tab list side.
 fn layout_icon(position: TabPosition) -> Div {
     let icon = div()
         .w(px(12.))
@@ -1411,8 +1411,8 @@ impl Render for TerminalView {
                 .collect();
 
             content_card(
-                // Il clip sta dentro il padding: anche rimpicciolita, la card
-                // mantiene il bordo e il margine inferiore visibili.
+                // Clip is inside the padding: even when shrunk, the card
+                // keeps its border and bottom margin visible.
                 div()
                     .relative()
                     .flex_1()
@@ -1561,7 +1561,7 @@ mod tests {
         cells
     }
 
-    // `use gpui::*` importa anche il macro `test` di gpui: path esplicito.
+    // `use gpui::*` also imports gpui's `test` macro: explicit path.
     #[::core::prelude::v1::test]
     fn minimum_size_depends_on_tab_position() {
         use TabPosition::*;
@@ -1605,11 +1605,11 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn active_index_survives_tab_close() {
-        // Chiudo una tab a sinistra: l'attiva scala di uno.
+        // Close a tab on the left: the active index shifts by one.
         assert_eq!(active_after_close(2, 0, 3), 1);
-        // Chiudo l'attiva in mezzo: resta sulla stessa posizione (la successiva).
+        // Close the active tab in the middle: it stays at the same position (next one).
         assert_eq!(active_after_close(1, 1, 2), 1);
-        // Chiudo l'ultima tab attiva: si passa alla precedente.
+        // Close the last active tab: switch to the previous one.
         assert_eq!(active_after_close(2, 2, 2), 1);
         assert_eq!(active_after_close(0, 0, 1), 0);
     }
@@ -1678,12 +1678,12 @@ mod tests {
         assert_eq!(line_len(&cells("", 8), None), 0);
         assert_eq!(line_len(&cells("ab", 8), None), 2);
 
-        // Una cella con sfondo colorato non è "vuota" e resta visibile.
+        // A cell with a colored background is not "empty" and stays visible.
         let mut c = cells("ab", 8);
         c[5].style.bg = Color::Indexed(1);
         assert_eq!(line_len(&c, None), 6);
 
-        // Il cursore oltre il testo non viene tagliato.
+        // The cursor past the text is not trimmed.
         assert_eq!(line_len(&c, Some(7)), 8);
     }
 }
