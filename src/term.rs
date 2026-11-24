@@ -87,6 +87,9 @@ pub struct Term {
     style: Style,
     saved_cursor: (usize, usize),
     wrap_pending: bool,
+    /// ConPTY chiede la posizione del cursore (ESC[6n) all'avvio e blocca
+    /// la shell finche non arriva la risposta.
+    pub dsr_pending: bool,
 }
 
 impl Term {
@@ -101,6 +104,7 @@ impl Term {
             style: Style::default(),
             saved_cursor: (0, 0),
             wrap_pending: false,
+            dsr_pending: false,
         }
     }
 
@@ -331,6 +335,7 @@ impl Perform for Term {
                 _ => self.clear(r * cols, (r + 1) * cols),
             },
             'm' => self.sgr(params),
+            'n' if raw(params, 0) == 6 => self.dsr_pending = true,
             _ => {}
         }
     }

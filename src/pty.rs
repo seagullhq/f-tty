@@ -18,7 +18,15 @@ impl Pty {
             pixel_height: 0,
         })?;
 
-        let _child = pair.slave.spawn_command(CommandBuilder::new(shell))?;
+        let mut cmd = CommandBuilder::new(shell);
+        // Le shell interattive e molti programmi si aspettano TERM impostato.
+        if cmd.get_env("TERM").is_none() {
+            cmd.env("TERM", "xterm-256color");
+        }
+
+        let _child = pair.slave.spawn_command(cmd)?;
+        // Su Windows ConPTY tenere lo slave aperto nel parent pu� impedire EOF.
+        drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;

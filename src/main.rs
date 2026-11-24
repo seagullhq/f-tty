@@ -65,7 +65,7 @@ impl TabPosition {
 
 struct Tab {
     id: usize,
-    pty: Pty,
+    pty: Option<Pty>,
     emu: Emulator,
     title: String,
     /// Cambia ad ogni ridimensionamento della griglia: le resize del PTY
@@ -79,11 +79,22 @@ struct Tab {
 
 impl Tab {
     fn terminal(id: usize, shell: &Shell) -> Self {
+        let mut emu = Emulator::new(COLS, ROWS);
+        let pty = match Pty::spawn(COLS as u16, ROWS as u16, &shell.program) {
+            Ok(pty) => Some(pty),
+            Err(err) => {
+                let msg = format!(
+                    "Impossibile avviare la shell \"{}\" ({})\r\n\r\n{}\r\n",
+                    shell.name, shell.program, err
+                );
+                emu.feed(msg.as_bytes());
+                None
+            }
+        };
         Self {
             id,
-            pty: Pty::spawn(COLS as u16, ROWS as u16, &shell.program)
-                .expect("impossibile avviare il PTY"),
-            emu: Emulator::new(COLS, ROWS),
+            pty,
+            emu,
             title: format!("Terminal {id}"),
             resize_seq: 0,
             scroll: 0,
@@ -212,9 +223,24 @@ impl TerminalView {
         for (i, tab) in self.tabs.iter_mut().enumerate() {
             let mut received = false;
             let history_before = tab.emu.term.history_len();
-            while let Ok(chunk) = tab.pty.rx.try_recv() {
-                tab.emu.feed(&chunk);
-                received = true;
+            let mut dsr: Option<Vec<u8>> = None;
+            if let Some(pty) = &tab.pty {
+                while let Ok(chunk) = pty.rx.try_recv() {
+                    tab.emu.feed(&chunk);
+                    if tab.emu.term.dsr_pending {
+                        tab.emu.term.dsr_pending = false;
+                        let (row, col) = tab.emu.term.cursor;
+                        dsr = Some(format!("\x1b[{};{}R", row + 1, col + 1).into_bytes());
+                    }
+                    received = true;
+                }
+            }
+            // Rispondi al DSR fuori dal borrow dell'emulatore: altrimenti
+            // ConPTY resta in attesa e la shell su Windows non parte.
+            if let Some(response) = dsr {
+                if let Some(pty) = &mut tab.pty {
+                    let _ = pty.write(&response);
+                }
             }
             let added = tab.emu.term.history_len() - history_before;
             if tab.scroll > 0 && added > 0 {
@@ -339,7 +365,9 @@ impl TerminalView {
                 // Digitare riporta sempre al presente.
                 tab.scroll = 0;
                 tab.scroll_acc = 0.;
-                let _ = tab.pty.write(&b);
+                if let Some(pty) = &mut tab.pty {
+                    let _ = pty.write(&b);
+                }
             }
         }
     }
@@ -401,7 +429,9 @@ impl TerminalView {
     fn apply_pty_resize(&mut self, id: usize, seq: u64, size: (u16, u16)) {
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
             if tab.resize_seq == seq {
-                let _ = tab.pty.resize(size.0, size.1);
+                if let Some(pty) = &tab.pty {
+                    let _ = pty.resize(size.0, size.1);
+                }
             }
         }
     }
@@ -853,6 +883,9 @@ impl TerminalView {
         } else {
             bar = bar.child(
                 div()
+                    .h_full()
+                    .flex()
+                    .items_center()
                     .text_xs()
                     .text_color(color_of(theme::MUTED))
                     .window_control_area(WindowControlArea::Drag)
@@ -867,18 +900,24 @@ impl TerminalView {
             div()
                 .flex()
                 .items_center()
+                .h_full()
                 .gap(theme::CONTROL_GAP)
                 .child(self.settings_button(cx))
                 .child(self.window_controls(window))
         };
 
-        bar.child(div().flex_1().window_control_area(WindowControlArea::Drag))
-            .child(right)
+        bar.child(
+            div()
+                .flex_1()
+                .h_full()
+                .window_control_area(WindowControlArea::Drag),
+        )
+        .child(right)
     }
 
     /// Caption buttons: tondi su Linux, a tutta altezza su Windows.
     fn window_controls(&self, window: &Window) -> impl IntoElement {
-        let icon_size = if cfg!(windows) { 10. } else { 11. };
+        let icon_size = if cfg!(windows) { 12. } else { 11. };
         let (maximize_id, maximize_icon) = if window.is_maximized() {
             ("restore", "icons/square-2-stack.svg")
         } else {
@@ -887,6 +926,7 @@ impl TerminalView {
         div()
             .flex()
             .items_center()
+            .h_full()
             .gap(if cfg!(windows) {
                 px(0.)
             } else {
@@ -1443,8 +1483,13 @@ impl Render for TerminalView {
                 .child(self.side_tabs(cx)),
         };
 
+        // Il focus deve stare nel body, non nella root: su Windows un elemento
+        // con track_focus chiama prevent_default() su ogni mouse down e
+        // GPUI 0.2.2 scarta WM_NCLBUTTONDOWN (HTCAPTION), bloccando il drag
+        // della titlebar client-side.
+        let body = body.track_focus(&self.focus);
+
         let root = div()
-            .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .relative()
             .size_full()
@@ -1586,6 +1631,13 @@ mod tests {
         assert_eq!(apply_scroll(0, 10, 1.5, &mut acc), 1);
         assert_eq!(apply_scroll(1, 10, 0.6, &mut acc), 2);
         assert_eq!(apply_scroll(2, 10, 100., &mut acc), 10);
+    }
+
+    #[::core::prelude::v1::test]
+    fn conpty_dsr_is_detected() {
+        let mut emu = Emulator::new(8, 2);
+        emu.feed(b"\x1b[6n");
+        assert!(emu.term.dsr_pending);
     }
 
     #[::core::prelude::v1::test]
