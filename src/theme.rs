@@ -3,7 +3,12 @@
 //! Chrome is a single surface; the terminal is a rounded "card" a few pixels
 //! away from the edges. No gradients, shadows or blur.
 
-use gpui::{Pixels, px};
+use gpui::{Hsla, Pixels, px, rgb};
+
+/// Converts a packed 0xRRGGBB token into a GPUI color.
+pub fn color_of(c: u32) -> Hsla {
+    rgb(c).into()
+}
 
 // Surfaces
 pub const CHROME: u32 = 0x262626;

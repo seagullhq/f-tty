@@ -14,6 +14,9 @@ impl AssetSource for Assets {
             "icons/square-2-stack.svg" => include_bytes!("../assets/icons/square-2-stack.svg"),
             "icons/x-mark.svg" => include_bytes!("../assets/icons/x-mark.svg"),
             "icons/plus.svg" => include_bytes!("../assets/icons/plus.svg"),
+            "icons/magnifying-glass.svg" => include_bytes!("../assets/icons/magnifying-glass.svg"),
+            "icons/chevron-down.svg" => include_bytes!("../assets/icons/chevron-down.svg"),
+            "icons/chevron-up.svg" => include_bytes!("../assets/icons/chevron-up.svg"),
             _ => return Ok(None),
         };
         Ok(Some(Cow::Borrowed(bytes)))

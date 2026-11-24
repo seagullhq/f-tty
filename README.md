@@ -7,11 +7,13 @@ A compact GPU terminal written in Rust with [GPUI](https://gpui.rs).
 ## Features
 
 - Multiple tabs, each with its own PTY and VTE emulator.
+- Tab labels follow the shell title (OSC 0/2) or the current directory (OSC 7), falling back to `Terminal N`.
 - Tab list position: **top, bottom, left or right**.
 - Settings inside the terminal area, without taking up a tab.
+- Searchable installed-font combobox in settings; tab position, shell and font are restored on the next launch.
 - Mouse text selection and copy with `Ctrl+Shift+C`.
 - 2,000-line scrollback per tab: mouse wheel and `Shift+PageUp` / `Shift+PageDown`.
-- Grid and PTY resized to the actual window space (SIGWINCH).
+- Grid and PTY resized to the actual window space (SIGWINCH); existing text rewraps to the new width without changing the font size.
 - Automatic shell detection (`/etc/shells` on Unix, `COMSPEC`/PATH on Windows).
 - Custom title bar: round controls on Linux, full-height captions on Windows, native traffic lights on macOS.
 - Flat dark theme, rounded corners, English UI.
@@ -43,6 +45,12 @@ cargo build --release
 | Scroll history | mouse wheel, `Shift+PageUp` / `Shift+PageDown` |
 | Back to the present | type a key or scroll to the bottom |
 | Open/close settings | gear button |
+
+## Configuration
+
+Preferences are saved in `%APPDATA%\ftty\settings.txt` on Windows and in
+`$XDG_CONFIG_HOME/ftty/settings.txt` (or `~/.config/ftty/settings.txt`) on Unix.
+Delete that file to return to the defaults.
 
 ## Status
 
