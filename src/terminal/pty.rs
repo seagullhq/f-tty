@@ -10,7 +10,7 @@ pub struct Pty {
 }
 
 impl Pty {
-    pub fn spawn(cols: u16, rows: u16, shell: &str) -> anyhow::Result<Self> {
+    pub fn spawn(cols: u16, rows: u16, shell: &str, cwd: Option<&str>) -> anyhow::Result<Self> {
         let pair = native_pty_system().openpty(PtySize {
             rows,
             cols,
@@ -23,6 +23,13 @@ impl Pty {
         if cmd.get_env("TERM").is_none() {
             cmd.env("TERM", "xterm-256color");
         }
+
+        // A new pane or tab starts where the previous one was, when that
+        // directory exists here (a path reported over SSH usually does not).
+        if let Some(dir) = cwd.filter(|d| std::path::Path::new(d).is_dir()) {
+            cmd.cwd(dir);
+        }
+        super::integration::apply(&mut cmd, shell);
 
         let _child = pair.slave.spawn_command(cmd)?;
         // Su Windows ConPTY tenere lo slave aperto nel parent pu� impedire EOF.
@@ -68,5 +75,50 @@ impl Pty {
             pixel_height: 0,
         })?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    /// Everything the shell prints until `needle` shows up (or 5 s pass).
+    fn read_until(pty: &Pty, needle: &str) -> String {
+        let (mut out, deadline) = (String::new(), Instant::now() + Duration::from_secs(5));
+        while Instant::now() < deadline && !out.contains(needle) {
+            if let Ok(chunk) = pty.rx.recv_timeout(Duration::from_millis(100)) {
+                out.push_str(&String::from_utf8_lossy(&chunk));
+            }
+        }
+        out
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_new_shell_starts_in_the_given_directory() {
+        let dir = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let mut pty = Pty::spawn(80, 24, "/bin/sh", Some(dir.to_str().unwrap())).unwrap();
+        pty.write(b"echo cwd=$(pwd)\n").unwrap();
+        let out = read_until(&pty, &format!("cwd={}", dir.display()));
+        assert!(
+            out.contains(&format!("cwd={}", dir.display())),
+            "got: {out:?}"
+        );
+        // A missing directory is ignored instead of failing the spawn.
+        assert!(Pty::spawn(80, 24, "/bin/sh", Some("/no/such/dir")).is_ok());
+    }
+
+    #[::core::prelude::v1::test]
+    fn the_pty_channel_closes_when_the_shell_exits() {
+        let mut pty = Pty::spawn(80, 24, "/bin/sh", None).unwrap();
+        pty.write(b"exit\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match pty.rx.recv_timeout(Duration::from_millis(100)) {
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                _ if Instant::now() > deadline => panic!("channel never closed"),
+                _ => {}
+            }
+        }
     }
 }

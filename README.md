@@ -39,12 +39,51 @@ cargo build --release
 | Action | Key |
 | --- | --- |
 | New tab | `Ctrl+Shift+T` |
-| Close tab | `Ctrl+Shift+W` |
+| Close pane (last pane: close tab) | `Ctrl+Shift+W` |
+| Split right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E`: any pane, any direction, nested like tmux (up to 8 per tab, each new pane opens in the same directory) |
+| Focus the pane left / right / above / below | `Ctrl+Shift+Arrow` (wraps around), or click |
+| Previous / next pane in order | `Ctrl+Shift+[` / `Ctrl+Shift+]` |
+| Zoom pane | `Ctrl+Shift+Z` or `Ctrl+Shift+Enter` |
+| Resize panes | drag a divider, or `Ctrl+Alt+Shift+Arrow` (moves the nearest border that way) |
+| Equalize panes | double-click a divider (that split), or `Ctrl+Alt+Shift+=` (all) |
+| Swap pane with previous / next | `Ctrl+Alt+Shift+[` / `]` |
+| Broadcast typing to all panes | `Ctrl+Shift+B` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Copy selection | `Ctrl+Shift+C` |
+| Find in scrollback | `Ctrl+Shift+F`, `Enter` / `Shift+Enter`, `Esc` |
+| Previous / next prompt | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` |
+| Open a link | `Ctrl+click` (OSC 8 links and plain `http(s)://` URLs) |
 | Scroll history | mouse wheel, `Shift+PageUp` / `Shift+PageDown` |
 | Back to the present | type a key or scroll to the bottom |
 | Open/close settings | gear button |
+
+## Shell integration (optional)
+
+Prompt jumping and "command finished" markers use OSC 133, which shells do not
+send on their own. Add the matching snippet to your shell config:
+
+```sh
+# bash (~/.bashrc)
+PS1='\[\e]133;A\a\]'"$PS1"
+PROMPT_COMMAND='printf "\e]133;D\a"'"${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
+
+# zsh (~/.zshrc)
+_ftty_d() { print -Pn '\e]133;D\a' }
+autoload -Uz add-zsh-hook && add-zsh-hook precmd _ftty_d
+PS1=$'%{\e]133;A\a%}'$PS1
+```
+
+```powershell
+# PowerShell ($PROFILE)
+function prompt { "$([char]27)]133;D$([char]7)$([char]27)]133;A$([char]7)PS $PWD> " }
+```
+
+A tab in the background shows its attention dot when a command finishes.
+
+The same hooks report the current directory (OSC 7), which is how a new tab
+or split opens where the previous one was. bash and zsh get all of this
+automatically; other shells need an equivalent `OSC 7` line in their prompt.
+A pane closes when its shell exits.
 
 ## Configuration
 

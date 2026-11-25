@@ -78,7 +78,7 @@ impl Perform for Term {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], _bell_terminated: bool) {
-        let Some(code) = params.first().and_then(|p| p.first()).copied() else {
+        let Some(code) = params.first().copied() else {
             return;
         };
         let Some(value) = params.get(1) else {
@@ -86,8 +86,8 @@ impl Perform for Term {
         };
         match code {
             // OSC 0 imposta icona e titolo; con due valori il titolo è l'ultimo.
-            b'0' | b'2' => {
-                let text = String::from_utf8_lossy(if code == b'0' {
+            b"0" | b"2" => {
+                let text = String::from_utf8_lossy(if code == b"0" {
                     params.last().copied().unwrap_or(value)
                 } else {
                     value
@@ -96,8 +96,27 @@ impl Perform for Term {
                 .to_string();
                 self.title = if text.is_empty() { None } else { Some(text) };
             }
-            b'7' => {
+            b"7" => {
                 self.cwd = cwd_from_url(&String::from_utf8_lossy(value));
+            }
+            // OSC 9: desktop notification text from the program.
+            b"9" => self.notice = Some(String::from_utf8_lossy(value).into_owned()),
+            b"133" => match value.first() {
+                Some(b'A') => self.mark_next = true,
+                Some(b'D') => self.done = true,
+                _ => {}
+            },
+            // OSC 52 ; targets ; base64 — write only. Reading the clipboard
+            // back would let any program in the tab spy on it.
+            b"52" => {
+                if let Some(text) = params.get(2).and_then(|data| base64_decode(data)) {
+                    self.clipboard = String::from_utf8(text).ok();
+                }
+            }
+            // OSC 8 ; params ; uri  (the uri may itself contain ';')
+            b"8" => {
+                let uri = params.get(2..).unwrap_or_default().join(&b';');
+                self.set_link(&String::from_utf8_lossy(&uri));
             }
             _ => {}
         }
@@ -210,4 +229,35 @@ impl Emulator {
             self.parser.advance(&mut self.term, byte);
         }
     }
+}
+
+/// Largest OSC 52 payload accepted, as encoded bytes (about 750 KB of text).
+const MAX_CLIPBOARD: usize = 1 << 20;
+
+/// Standard-alphabet base64, tolerant of whitespace and missing padding.
+/// `None` on any other byte or an oversized payload.
+fn base64_decode(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() > MAX_CLIPBOARD {
+        return None;
+    }
+    let (mut out, mut acc, mut bits) = (Vec::with_capacity(data.len() * 3 / 4), 0u32, 0);
+    for &b in data {
+        let v = match b {
+            b'A'..=b'Z' => b - b'A',
+            b'a'..=b'z' => b - b'a' + 26,
+            b'0'..=b'9' => b - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' | b' ' | b'\r' | b'\n' => continue,
+            _ => return None,
+        };
+        acc = acc << 6 | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+            acc &= (1 << bits) - 1;
+        }
+    }
+    Some(out)
 }

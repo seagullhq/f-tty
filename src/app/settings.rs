@@ -28,6 +28,11 @@ impl Default for SavedSettings {
 /// Config file: `%APPDATA%/ftty/settings.txt` on Windows,
 /// `$XDG_CONFIG_HOME/ftty/settings.txt` (or `~/.config`) elsewhere.
 fn path() -> Option<PathBuf> {
+    config_dir().map(|dir| dir.join("settings.txt"))
+}
+
+/// `…/ftty`, under the platform's per-user config folder.
+pub(crate) fn config_dir() -> Option<PathBuf> {
     #[cfg(windows)]
     let base = std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| {
         std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join("AppData\\Roaming"))
@@ -38,7 +43,7 @@ fn path() -> Option<PathBuf> {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
 
-    base.map(|dir| dir.join("ftty").join("settings.txt"))
+    base.map(|dir| dir.join("ftty"))
 }
 
 pub(crate) fn load() -> SavedSettings {

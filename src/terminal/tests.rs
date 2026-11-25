@@ -115,10 +115,13 @@ fn osc_0_with_icon_and_title_uses_title() {
 fn osc_7_extracts_directory_name() {
     let mut emu = Emulator::new(8, 2);
     emu.feed(b"\x1b]7;file:///C:/Users/DANIELE/Desktop/f-tty\x07");
-    assert_eq!(
-        emu.term.cwd.as_deref(),
-        Some("C:/Users/DANIELE/Desktop/f-tty")
-    );
+    // The leading slash before a drive letter is only dropped on Windows.
+    let expected = if cfg!(windows) {
+        "C:/Users/DANIELE/Desktop/f-tty"
+    } else {
+        "/C:/Users/DANIELE/Desktop/f-tty"
+    };
+    assert_eq!(emu.term.cwd.as_deref(), Some(expected));
     assert_eq!(emu.term.display_title(1), "f-tty");
 }
 
@@ -185,4 +188,38 @@ fn private_modes_toggle() {
     assert_eq!(t.mouse, 1002);
     emu.feed(b"\x1b[?1002l");
     assert_eq!(emu.term.mouse, 0);
+}
+
+#[::core::prelude::v1::test]
+fn notify_oscs_set_their_flags() {
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"\x1b]9;done\x07");
+    assert_eq!(emu.term.notice.as_deref(), Some("done"));
+    emu.feed(b"\x1b]133;D;0\x07");
+    assert!(emu.term.done);
+    // Other prompt marks and unrelated codes stay silent.
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"\x1b]133;A\x07\x1b]1;x\x07\x1b]13;x\x07");
+    assert!(!emu.term.done && !emu.term.bell && emu.term.notice.is_none());
+}
+
+#[::core::prelude::v1::test]
+fn osc_52_sets_clipboard_text() {
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"\x1b]52;c;aGVsbG8gd29ybGQ=\x07");
+    assert_eq!(emu.term.clipboard.as_deref(), Some("hello world"));
+    // No padding, and a query ("?") never reads anything back.
+    emu.feed(b"\x1b]52;c;aGk\x07\x1b]52;c;?\x07");
+    assert_eq!(emu.term.clipboard.as_deref(), Some("hi"));
+    // Garbage is dropped.
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"\x1b]52;c;@@@\x07");
+    assert!(emu.term.clipboard.is_none());
+}
+
+#[::core::prelude::v1::test]
+fn osc_7_path_keeps_spaces_and_decodes_percent() {
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"\x1b]7;file://host/tmp/sp ace%2541\x07");
+    assert_eq!(emu.term.cwd.as_deref(), Some("/tmp/sp ace%41"));
 }

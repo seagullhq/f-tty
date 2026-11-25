@@ -2,6 +2,7 @@
 
 mod color;
 mod grid;
+mod integration;
 mod parser;
 
 pub(crate) mod pty;

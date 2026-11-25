@@ -32,6 +32,8 @@ pub const TAB_WIDTH: Pixels = px(132.);
 pub const TAB_MIN_WIDTH: Pixels = px(80.);
 pub const TAB_HEIGHT: Pixels = px(26.);
 pub const TAB_PADDING: Pixels = px(8.);
+/// Gap between split panes.
+pub const SPLIT_GAP: Pixels = px(6.);
 pub const STRIP_WIDTH: Pixels = px(140.);
 /// Side tab list limits: at the minimum only a letter per tab is shown.
 pub const STRIP_MIN: Pixels = px(40.);

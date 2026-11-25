@@ -2,18 +2,32 @@
 
 mod input;
 mod layout;
+mod links;
+mod notify;
+mod panes;
+mod prompts;
+mod scrollbar;
 mod search;
 mod selection;
 mod settings;
+mod tree;
+pub(crate) use settings::config_dir;
 pub(crate) mod startup;
 
 use crate::terminal::Emulator;
 use crate::terminal::pty::Pty;
 use crate::terminal::shells::{self, Shell};
 use crate::ui::components::Combobox;
+use crate::ui::theme;
 use crate::{COLS, ROWS};
 use gpui::*;
-use std::time::Duration;
+use std::ops::{Deref, DerefMut};
+use std::sync::mpsc::TryRecvError;
+use std::time::{Duration, Instant};
+use tree::Tree;
+
+/// A finished command pops a notification only if it ran at least this long.
+const NOTIFY_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TabPosition {
@@ -48,17 +62,11 @@ impl Default for TabPosition {
     }
 }
 
-pub(crate) struct Tab {
+/// One terminal session inside a tab: shell, screen and scroll state.
+pub(crate) struct Pane {
     pub(crate) id: usize,
     pub(crate) pty: Option<Pty>,
     pub(crate) emu: Emulator,
-    pub(crate) title: String,
-    /// Shell tag shown in the tab (see `Shell::badge`).
-    pub(crate) badge: String,
-    /// Accent color of the badge, unique among open tabs while possible.
-    pub(crate) tint: u32,
-    /// A bell rang while the tab was out of sight.
-    pub(crate) attention: bool,
     /// Changes on every grid resize: PTY resizes only start when the drag
     /// stops (the latest generation wins).
     pub(crate) resize_seq: u64,
@@ -69,14 +77,22 @@ pub(crate) struct Tab {
     /// True while the user has typed input that has not been submitted yet.
     /// Prevents the resize redraw from executing a pending command.
     pub(crate) input_pending: bool,
+    /// When the running command was submitted (Enter), until it finishes.
+    pub(crate) busy_since: Option<Instant>,
     /// Last size applied to the PTY, used to detect column changes.
     pub(crate) pty_size: (u16, u16),
+    /// Window position of the pane's first cell and its size, set on render.
+    pub(crate) origin: Point<Pixels>,
+    pub(crate) area: Size<Pixels>,
+    pub(crate) born: Instant,
+    /// The shell ended; the pane is removed on the next pump.
+    pub(crate) exited: bool,
 }
 
-impl Tab {
-    fn terminal(id: usize, shell: &Shell, tint: u32) -> Self {
+impl Pane {
+    fn spawn(id: usize, shell: &Shell, cwd: Option<&str>) -> Self {
         let mut emu = Emulator::new(COLS, ROWS);
-        let pty = match Pty::spawn(COLS as u16, ROWS as u16, &shell.program) {
+        let pty = match Pty::spawn(COLS as u16, ROWS as u16, &shell.program, cwd) {
             Ok(pty) => Some(pty),
             Err(err) => {
                 let msg = format!(
@@ -91,17 +107,135 @@ impl Tab {
             id,
             pty,
             emu,
-            title: format!("Terminal {id}"),
-            badge: shell.badge(),
-            tint,
-            attention: false,
             resize_seq: 0,
             scroll: 0,
             scroll_acc: 0.,
             input_pending: false,
+            busy_since: None,
             pty_size: (COLS as u16, ROWS as u16),
+            origin: point(px(0.), px(0.)),
+            area: size(px(1.), px(1.)),
+            born: Instant::now(),
+            exited: false,
         }
     }
+}
+
+/// Most panes one tab can hold: beyond this they become too small to use.
+pub(crate) const MAX_PANES: usize = 8;
+
+pub(crate) struct Tab {
+    pub(crate) id: usize,
+    pub(crate) title: String,
+    /// Shell tag shown in the tab (see `Shell::badge`).
+    pub(crate) badge: String,
+    /// Accent color of the badge, unique among open tabs while possible.
+    pub(crate) tint: u32,
+    /// A bell rang while the tab was out of sight.
+    pub(crate) attention: bool,
+    /// Never empty, in creation order.
+    pub(crate) panes: Vec<Pane>,
+    /// Index of the focused pane in `panes`.
+    pub(crate) focus: usize,
+    /// How the panes are arranged (leaves are pane ids).
+    pub(crate) tree: Tree,
+    /// Area the tree fills, set on render (window coordinates).
+    pub(crate) rect: tree::Rect,
+    /// Only the focused pane is shown, filling the area.
+    pub(crate) zoomed: bool,
+    /// Typed input goes to every pane of the tab.
+    pub(crate) broadcast: bool,
+}
+
+/// The tab behaves as its focused pane for everything about a single
+/// terminal (`tab.emu`, `tab.scroll`, `tab.pty`, ...).
+impl Deref for Tab {
+    type Target = Pane;
+    fn deref(&self) -> &Pane {
+        &self.panes[self.focus]
+    }
+}
+
+impl DerefMut for Tab {
+    fn deref_mut(&mut self) -> &mut Pane {
+        &mut self.panes[self.focus]
+    }
+}
+
+impl Tab {
+    fn terminal(id: usize, shell: &Shell, tint: u32, cwd: Option<&str>) -> Self {
+        Self {
+            id,
+            title: format!("Terminal {id}"),
+            badge: shell.badge(),
+            tint,
+            attention: false,
+            panes: vec![Pane::spawn(id, shell, cwd)],
+            focus: 0,
+            tree: Tree::Leaf(id),
+            rect: (0., 0., 1., 1.),
+            zoomed: false,
+            broadcast: false,
+        }
+    }
+
+    pub(crate) fn focus_id(&self) -> usize {
+        self.panes[self.focus].id
+    }
+
+    pub(crate) fn index_of(&self, id: usize) -> Option<usize> {
+        self.panes.iter().position(|p| p.id == id)
+    }
+
+    /// Opens `pane` next to the focused one (right or below, by `axis`) and
+    /// focuses it. False if the tree could not take it.
+    fn add_pane(&mut self, pane: Pane, axis: Axis) -> bool {
+        if !self.tree.split_leaf(self.focus_id(), pane.id, axis) {
+            return false;
+        }
+        self.panes.push(pane);
+        self.focus = self.panes.len() - 1;
+        self.zoomed = false;
+        true
+    }
+
+    /// Removes pane `i` (never the last one). If it had focus, focus moves
+    /// to the previous pane in tree order, else the next.
+    fn remove_pane(&mut self, i: usize) {
+        let (id, focused) = (self.panes[i].id, self.focus_id());
+        let order = self.tree.leaves();
+        let at = order.iter().position(|l| *l == id).unwrap_or(0);
+        let heir = if at > 0 {
+            order.get(at - 1)
+        } else {
+            order.get(at + 1)
+        };
+        let keep = if id == focused {
+            heir.copied().unwrap_or(focused)
+        } else {
+            focused
+        };
+        self.tree.remove_leaf(id);
+        self.panes.remove(i);
+        self.focus = self.index_of(keep).unwrap_or(0);
+        self.zoomed = false;
+    }
+}
+
+/// Removes panes whose shell ended, and tabs whose only pane did.
+/// True if anything was removed.
+fn prune_exited(tabs: &mut Vec<Tab>) -> bool {
+    let before: usize = tabs.iter().map(|t| t.panes.len()).sum();
+    for tab in tabs.iter_mut() {
+        while tab.panes.len() > 1 {
+            match tab.panes.iter().position(|p| p.exited) {
+                Some(i) => tab.remove_pane(i),
+                None => break,
+            }
+        }
+    }
+    tabs.retain(|t| !(t.panes.len() == 1 && t.panes[0].exited));
+    before != tabs.iter().map(|t| t.panes.len()).sum::<usize>()
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -127,6 +261,12 @@ pub(crate) struct TerminalView {
     pub(crate) line_height: Pixels,
     pub(crate) selection: Option<Selection>,
     pub(crate) selecting: bool,
+    /// A divider between panes is being dragged.
+    pub(crate) split_drag: Option<panes::SplitDrag>,
+    /// Every shell ended: the window closes on the next render.
+    pub(crate) quit: bool,
+    /// The scrollbar thumb is being dragged.
+    pub(crate) scrollbar_drag: bool,
     /// Scrollback search bar, when open.
     pub(crate) search: Option<search::Search>,
     /// A left press was sent to the program, so its drag and release are too.
@@ -182,7 +322,7 @@ impl TerminalView {
 
         Self {
             focus,
-            tabs: vec![Tab::terminal(1, &shell, layout::pick_tint(&[]))],
+            tabs: vec![Tab::terminal(1, &shell, layout::pick_tint(&[]), None)],
             active: 0,
             next_id: 2,
             tabs_position: saved.tabs_position,
@@ -197,6 +337,9 @@ impl TerminalView {
             line_height,
             selection: None,
             selecting: false,
+            split_drag: None,
+            quit: false,
+            scrollbar_drag: false,
             search: None,
             mouse_reported: false,
             font: font_family.into(),
@@ -294,66 +437,149 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Drains chunks from all tabs and notifies on output or title changes.
+    /// Drains chunks from all panes and notifies on output or title changes.
     fn pump(&mut self, cx: &mut Context<Self>) {
         let mut active_received = false;
         let mut title_changed = false;
+        let window_away = cx.active_window().is_none();
         for (i, tab) in self.tabs.iter_mut().enumerate() {
+            let hidden = i != self.active || self.settings_open;
+            let away = hidden || window_away;
+            let Tab {
+                panes,
+                focus,
+                id,
+                title,
+                attention,
+                ..
+            } = tab;
             let mut received = false;
-            let history_before = tab.emu.term.history_len();
-            let mut dsr: Option<Vec<u8>> = None;
-            if let Some(pty) = &tab.pty {
-                while let Ok(chunk) = pty.rx.try_recv() {
-                    tab.emu.feed(&chunk);
-                    if tab.emu.term.dsr_pending {
-                        tab.emu.term.dsr_pending = false;
-                        let (row, col) = tab.emu.term.cursor;
-                        dsr = Some(format!("\x1b[{};{}R", row + 1, col + 1).into_bytes());
+            for (j, pane) in panes.iter_mut().enumerate() {
+                let history_before = pane.emu.term.history_len();
+                let mut dsr: Option<Vec<u8>> = None;
+                let mut gone = false;
+                if let Some(pty) = &pane.pty {
+                    loop {
+                        match pty.rx.try_recv() {
+                            Ok(chunk) => {
+                                pane.emu.feed(&chunk);
+                                if pane.emu.term.dsr_pending {
+                                    pane.emu.term.dsr_pending = false;
+                                    let (row, col) = pane.emu.term.cursor;
+                                    dsr =
+                                        Some(format!("\x1b[{};{}R", row + 1, col + 1).into_bytes());
+                                }
+                                received = true;
+                            }
+                            Err(TryRecvError::Empty) => break,
+                            Err(TryRecvError::Disconnected) => {
+                                gone = true;
+                                break;
+                            }
+                        }
                     }
+                }
+                if gone {
+                    pane.pty = None;
+                    received = true;
+                    // A shell that dies at once is left on screen so its
+                    // error can be read; any other exit closes the pane.
+                    if pane.born.elapsed() < Duration::from_secs(2) {
+                        pane.emu.feed(b"\r\n[process exited]\r\n");
+                    } else {
+                        pane.exited = true;
+                    }
+                }
+                // Rispondi al DSR fuori dal borrow dell'emulatore: altrimenti
+                // ConPTY resta in attesa e la shell su Windows non parte.
+                if let Some(response) = dsr {
+                    if let Some(pty) = &mut pane.pty {
+                        let _ = pty.write(&response);
+                    }
+                }
+                if std::mem::take(&mut pane.emu.term.bell) && hidden {
+                    *attention = true;
                     received = true;
                 }
-            }
-            // Rispondi al DSR fuori dal borrow dell'emulatore: altrimenti
-            // ConPTY resta in attesa e la shell su Windows non parte.
-            if let Some(response) = dsr {
-                if let Some(pty) = &mut tab.pty {
-                    let _ = pty.write(&response);
+                if let Some(text) = pane.emu.term.clipboard.take() {
+                    cx.write_to_clipboard(ClipboardItem::new_string(text));
+                }
+                // Notifications: shown when the user is not looking at this tab.
+                if let Some(text) = pane.emu.term.notice.take() {
+                    if away {
+                        *attention = hidden;
+                        received = true;
+                        notify::send(title, &text);
+                    }
+                }
+                if std::mem::take(&mut pane.emu.term.done) {
+                    // Only commands submitted with Enter count: the prompt that
+                    // follows shell startup also reports "done".
+                    if let Some(since) = pane.busy_since.take() {
+                        if hidden {
+                            *attention = true;
+                            received = true;
+                        }
+                        if away && since.elapsed() >= NOTIFY_AFTER {
+                            notify::send(title, "Command finished");
+                        }
+                    }
+                }
+                let added = pane.emu.term.history_len() - history_before;
+                if pane.scroll > 0 && added > 0 {
+                    // The text in view stays put while output arrives.
+                    pane.scroll = (pane.scroll + added).min(pane.emu.term.history_len());
+                }
+                if j == *focus {
+                    let new_title = pane.emu.term.display_title(*id);
+                    if new_title != *title {
+                        *title = new_title;
+                        title_changed = true;
+                    }
                 }
             }
-            if std::mem::take(&mut tab.emu.term.bell) && (i != self.active || self.settings_open) {
-                tab.attention = true;
-                received = true;
+            if !hidden {
+                *attention = false;
             }
-            if i == self.active && !self.settings_open {
-                tab.attention = false;
-            }
-            let added = tab.emu.term.history_len() - history_before;
-            if tab.scroll > 0 && added > 0 {
-                // The text in view stays put while output arrives.
-                tab.scroll = (tab.scroll + added).min(tab.emu.term.history_len());
-            }
-            if received {
-                let new_title = tab.emu.term.display_title(tab.id);
-                if new_title != tab.title {
-                    tab.title = new_title;
-                    title_changed = true;
-                }
-                if i == self.active {
-                    active_received = true;
-                }
+            if received && i == self.active {
+                active_received = true;
             }
         }
-        if active_received || title_changed {
+        let closed = self.close_exited();
+        if active_received || title_changed || closed {
             cx.notify();
         }
     }
 
+    /// Drops panes whose shell ended, then tabs left empty; the window
+    /// closes when nothing is left. True if anything changed.
+    fn close_exited(&mut self) -> bool {
+        let active_id = self.tabs.get(self.active).map(|t| t.id);
+        if !prune_exited(&mut self.tabs) {
+            return false;
+        }
+        self.quit = self.tabs.is_empty();
+        self.active = self
+            .tabs
+            .iter()
+            .position(|t| Some(t.id) == active_id)
+            .unwrap_or_else(|| self.active.min(self.tabs.len().saturating_sub(1)));
+        self.selection = None;
+        self.selecting = false;
+        true
+    }
+
     pub(crate) fn open_tab(&mut self, cx: &mut Context<Self>) {
         let used: Vec<u32> = self.tabs.iter().map(|t| t.tint).collect();
+        let cwd = self
+            .tabs
+            .get(self.active)
+            .and_then(|t| t.emu.term.cwd.clone());
         self.tabs.push(Tab::terminal(
             self.next_id,
             &self.shell,
             layout::pick_tint(&used),
+            cwd.as_deref(),
         ));
         self.next_id += 1;
         self.active = self.tabs.len() - 1;
@@ -405,38 +631,68 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Aligns the grid to the available space; the PTY receives SIGWINCH
-    /// only when resizing stops, to avoid redrawing the shell on every
-    /// pixel during the drag.
-    pub(crate) fn resize_active_terminal(
-        &mut self,
-        cols: usize,
-        rows: usize,
-        cx: &mut Context<Self>,
-    ) {
+    /// Aligns every pane of the active tab to its share of the terminal
+    /// area, and records where each one sits for mouse hit-testing. The PTY
+    /// receives SIGWINCH only when resizing stops, to avoid redrawing the
+    /// shell on every pixel during the drag.
+    pub(crate) fn layout_panes(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let area = self.terminal_area(window);
+        let base = self.content_origin();
+        let (cell, line) = (self.cell_width, self.line_height);
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };
-        if tab.emu.term.cols == cols && tab.emu.term.rows == rows {
+        tab.rect = (
+            f32::from(base.x),
+            f32::from(base.y),
+            f32::from(area.width),
+            f32::from(area.height),
+        );
+        let rects = if tab.zoomed {
+            // Only the focused pane is shown; the rest keep their last size.
+            vec![(tab.focus_id(), tab.rect)]
+        } else {
+            tab.tree.layout(tab.rect, f32::from(theme::SPLIT_GAP)).panes
+        };
+        let mut resizes = Vec::new();
+        for (id, (x, y, w, h)) in rects {
+            let Some(pane) = tab.panes.iter_mut().find(|p| p.id == id) else {
+                continue;
+            };
+            pane.origin = point(px(x), px(y));
+            pane.area = size(px(w), px(h));
+            let cols = ((pane.area.width / cell).floor() as usize).max(1);
+            let rows = ((pane.area.height / line).floor() as usize).max(1);
+            if pane.emu.term.cols == cols && pane.emu.term.rows == rows {
+                continue;
+            }
+            pane.emu.term.resize(cols, rows);
+            pane.scroll = pane.scroll.min(pane.emu.term.history_len());
+            pane.resize_seq += 1;
+            resizes.push((pane.id, pane.resize_seq, (cols as u16, rows as u16)));
+        }
+        if resizes.is_empty() {
             return;
         }
-        tab.emu.term.resize(cols, rows);
-        tab.scroll = tab.scroll.min(tab.emu.term.history_len());
         self.selection = None;
-        tab.resize_seq += 1;
-        let (id, seq) = (tab.id, tab.resize_seq);
-        let target = (cols as u16, rows as u16);
-        cx.spawn(async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(120))
-                .await;
-            let _ = this.update(cx, |view, _| view.apply_pty_resize(id, seq, target));
-        })
-        .detach();
+        for (id, seq, target) in resizes {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(120))
+                    .await;
+                let _ = this.update(cx, |view, _| view.apply_pty_resize(id, seq, target));
+            })
+            .detach();
+        }
     }
 
     fn apply_pty_resize(&mut self, id: usize, seq: u64, size: (u16, u16)) {
-        if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
+        if let Some(tab) = self
+            .tabs
+            .iter_mut()
+            .flat_map(|tab| tab.panes.iter_mut())
+            .find(|pane| pane.id == id)
+        {
             if tab.resize_seq == seq {
                 if let Some(pty) = &mut tab.pty {
                     let _ = pty.resize(size.0, size.1);
@@ -453,5 +709,74 @@ impl TerminalView {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tab whose shell cannot start: no process, but real panes.
+    fn dead_shell() -> Shell {
+        Shell {
+            name: "none".into(),
+            program: "/nonexistent/shell".into(),
+        }
+    }
+
+    /// Tab with `extra` more panes, each split to the right of the last.
+    fn tab(id: usize, extra: usize) -> Tab {
+        let shell = dead_shell();
+        let mut tab = Tab::terminal(id, &shell, 0, None);
+        for k in 0..extra {
+            assert!(tab.add_pane(Pane::spawn(100 + k, &shell, None), Axis::Horizontal));
+        }
+        tab
+    }
+
+    #[::core::prelude::v1::test]
+    fn a_new_pane_takes_focus_and_a_place_in_the_tree() {
+        let mut t = tab(1, 0);
+        assert!(t.add_pane(Pane::spawn(2, &dead_shell(), None), Axis::Horizontal));
+        t.focus = 0;
+        // Split the first pane downwards: a column nested inside the row.
+        assert!(t.add_pane(Pane::spawn(3, &dead_shell(), None), Axis::Vertical));
+        assert_eq!(t.focus_id(), 3);
+        assert_eq!(t.tree.leaves(), vec![1, 3, 2]);
+        assert_eq!(t.tree.path_to(3), Some(vec![0, 1]));
+        assert!(!t.zoomed);
+    }
+
+    #[::core::prelude::v1::test]
+    fn removing_moves_focus_to_the_previous_pane_in_tree_order() {
+        let mut t = tab(1, 2); // 1 | 100 | 101, focus on 101
+        t.remove_pane(2);
+        assert_eq!((t.focus_id(), t.tree.leaves()), (100, vec![1, 100]));
+        t.focus = 0; // pane 1: nothing before it, the next one inherits
+        t.remove_pane(0);
+        assert_eq!(
+            (t.panes.len(), t.focus_id(), t.tree),
+            (1, 100, Tree::Leaf(100))
+        );
+        // Removing an unfocused pane leaves focus on the same pane.
+        let mut t = tab(1, 2);
+        t.focus = 1;
+        t.remove_pane(0);
+        assert_eq!(t.focus_id(), 100);
+    }
+
+    #[::core::prelude::v1::test]
+    fn exited_panes_close_then_empty_tabs_then_nothing_is_left() {
+        let mut tabs = vec![tab(1, 1), tab(2, 0)];
+        tabs[0].panes[0].exited = true; // one of two panes
+        assert!(prune_exited(&mut tabs));
+        assert_eq!((tabs.len(), tabs[0].panes.len()), (2, 1));
+        assert_eq!(tabs[0].tree, Tree::Leaf(100));
+        tabs[1].panes[0].exited = true; // the only pane of a tab
+        assert!(prune_exited(&mut tabs));
+        assert_eq!(tabs.len(), 1);
+        tabs[0].panes[0].exited = true;
+        assert!(prune_exited(&mut tabs) && tabs.is_empty());
+        assert!(!prune_exited(&mut tabs));
     }
 }

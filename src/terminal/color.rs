@@ -56,6 +56,10 @@ impl Default for Style {
 pub struct Cell {
     pub ch: char,
     pub style: Style,
+    /// OSC 8 hyperlink: 1-based index into `Term::links`, 0 = none.
+    pub link: u16,
+    /// First cell written after an OSC 133;A: the line holds a prompt.
+    pub mark: bool,
 }
 
 impl Default for Cell {
@@ -63,6 +67,8 @@ impl Default for Cell {
         Self {
             ch: ' ',
             style: Style::default(),
+            link: 0,
+            mark: false,
         }
     }
 }

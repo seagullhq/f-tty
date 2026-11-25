@@ -1,7 +1,9 @@
 //! Keyboard and mouse event handling.
 
+use crate::app::tree::Dir;
 use crate::app::{Selection, TerminalView};
 use gpui::*;
+use std::time::Instant;
 
 impl TerminalView {
     pub(crate) fn on_key(
@@ -14,7 +16,21 @@ impl TerminalView {
 
         // Tab shortcuts (not sent to the shell).
         if ks.modifiers.control {
-            if ks.modifiers.shift {
+            if ks.modifiers.shift && ks.modifiers.alt {
+                // Pane layout: resize, equalize, swap.
+                if let Some(dir) = Dir::parse(&ks.key) {
+                    return self.resize_pane_key(dir, cx);
+                }
+                match ks.key.as_str() {
+                    "=" | "+" => return self.equalize_panes(cx),
+                    "[" | "{" => return self.swap_pane(-1, cx),
+                    "]" | "}" => return self.swap_pane(1, cx),
+                    _ => {}
+                }
+            } else if ks.modifiers.shift {
+                if let Some(dir) = Dir::parse(&ks.key) {
+                    return self.focus_direction(dir, cx);
+                }
                 match ks.key.as_str() {
                     "c" => {
                         self.copy_selection(cx);
@@ -28,11 +44,19 @@ impl TerminalView {
                             self.settings_open = false;
                             cx.notify();
                         } else {
-                            self.close_tab(self.active, window, cx);
+                            self.close_pane(window, cx);
                         }
                         return;
                     }
+                    "d" => return self.split_pane(Axis::Horizontal, cx),
+                    "e" => return self.split_pane(Axis::Vertical, cx),
+                    "[" | "{" => return self.cycle_pane(-1, cx),
+                    "]" | "}" => return self.cycle_pane(1, cx),
+                    "z" | "enter" => return self.toggle_zoom(cx),
+                    "b" => return self.toggle_broadcast(cx),
                     "tab" => return self.cycle_tab(-1, cx),
+                    "pageup" => return self.jump_prompt(true, cx),
+                    "pagedown" => return self.jump_prompt(false, cx),
                     _ => {}
                 }
             } else if ks.key == "tab" {
@@ -87,13 +111,12 @@ impl TerminalView {
                 // Ctrl+C cancels it. Any other key leaves input pending.
                 if bytes == b"\r" || bytes == b"\x03" {
                     tab.input_pending = false;
+                    tab.busy_since = (bytes == b"\r").then(Instant::now);
                 } else {
                     tab.input_pending = true;
                 }
-                if let Some(pty) = &mut tab.pty {
-                    let _ = pty.write(&bytes);
-                }
             }
+            self.send(&bytes);
         }
     }
 
@@ -157,8 +180,18 @@ impl TerminalView {
         }
     }
 
+    /// Writes to the focused pane, or to every pane while broadcasting.
     fn send(&mut self, bytes: &[u8]) {
-        if let Some(pty) = self.tabs.get_mut(self.active).and_then(|t| t.pty.as_mut()) {
+        let Some(tab) = self.tabs.get_mut(self.active) else {
+            return;
+        };
+        if tab.broadcast {
+            for pane in &mut tab.panes {
+                if let Some(pty) = &mut pane.pty {
+                    let _ = pty.write(bytes);
+                }
+            }
+        } else if let Some(pty) = &mut tab.pty {
             let _ = pty.write(bytes);
         }
     }
@@ -250,8 +283,19 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if !self.settings_open && self.on_scrollbar(ev.position) {
+            self.scrollbar_drag = true;
+            self.scrollbar_to(ev.position, cx);
+            return;
+        }
         if self.settings_open || self.tabs[self.active].scroll > 0 {
             return;
+        }
+        if ev.modifiers.control {
+            if let Some(uri) = self.link_at(ev.position) {
+                cx.open_url(&uri);
+                return;
+            }
         }
         let cell = self.cell_at(ev.position);
         if self.report_mouse(0, cell, true, ev.modifiers.shift) {
@@ -272,6 +316,18 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.split_drag.is_some() {
+            return self.drag_divider(ev, cx);
+        }
+        if self.scrollbar_drag {
+            if ev.pressed_button == Some(MouseButton::Left) {
+                self.scrollbar_to(ev.position, cx);
+            } else {
+                self.scrollbar_drag = false;
+                cx.notify();
+            }
+            return;
+        }
         if self.mouse_reported {
             let mode = self.tabs[self.active].emu.term.mouse;
             // 1002 reports drags, 1003 every move.
@@ -299,6 +355,13 @@ impl TerminalView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.split_drag.take().is_some() {
+            return;
+        }
+        if std::mem::take(&mut self.scrollbar_drag) {
+            cx.notify();
+            return;
+        }
         if std::mem::take(&mut self.mouse_reported) {
             let cell = self.cell_at(ev.position);
             self.report_mouse(0, cell, false, false);

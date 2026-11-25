@@ -6,7 +6,15 @@ use crate::ui::theme;
 use gpui::*;
 
 impl TerminalView {
+    /// Where the focused pane's first cell is (window coordinates).
     pub(crate) fn text_origin(&self) -> Point<Pixels> {
+        self.tabs
+            .get(self.active)
+            .map_or(self.content_origin(), |t| t.origin)
+    }
+
+    /// Top-left of the terminal area, before panes are placed in it.
+    pub(crate) fn content_origin(&self) -> Point<Pixels> {
         let mut x = theme::GAP + px(1.) + theme::CONTENT_PADDING;
         if self.tabs_position == TabPosition::Left {
             x += self.strip_width + theme::GAP;

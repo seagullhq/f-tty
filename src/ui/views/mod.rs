@@ -120,10 +120,11 @@ impl TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let area = self.terminal_area(window);
-        let cols = ((area.width / self.cell_width).floor() as usize).max(1);
-        let rows = ((area.height / self.line_height).floor() as usize).max(1);
-        self.resize_active_terminal(cols, rows, cx);
+        if self.quit {
+            window.remove_window();
+            return div();
+        }
+        self.layout_panes(window, cx);
 
         let card = if self.settings_open {
             content_card(self.settings(cx))

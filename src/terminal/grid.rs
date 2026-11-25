@@ -50,6 +50,19 @@ pub struct Term {
     pub mouse_sgr: bool,
     /// BEL received since the flag was last taken.
     pub bell: bool,
+    /// A command finished (OSC 133;D) since the flag was last taken.
+    pub done: bool,
+    /// Text a program asked to copy with OSC 52, not yet put on the clipboard.
+    pub clipboard: Option<String>,
+    /// Text of an OSC 9 notification not yet shown.
+    pub notice: Option<String>,
+    /// Distinct OSC 8 targets seen so far. ponytail: never pruned, bounded by
+    /// `u16`; a prune pass if a tab ever prints that many distinct links.
+    pub links: Vec<String>,
+    /// Link id applied to newly written cells (0 = none).
+    pub(super) link: u16,
+    /// Mark the next written cell as a prompt start (OSC 133;A).
+    pub(super) mark_next: bool,
 }
 
 impl Term {
@@ -77,7 +90,33 @@ impl Term {
             mouse: 0,
             mouse_sgr: false,
             bell: false,
+            done: false,
+            clipboard: None,
+            notice: None,
+            links: Vec::new(),
+            link: 0,
+            mark_next: false,
         }
+    }
+
+    /// Target of the hyperlink on a cell, if any.
+    pub fn link_of(&self, cell: &Cell) -> Option<&str> {
+        let id = usize::from(cell.link).checked_sub(1)?;
+        self.links.get(id).map(String::as_str)
+    }
+
+    /// Selects the link applied to following text; empty `uri` ends it.
+    pub(super) fn set_link(&mut self, uri: &str) {
+        self.link = if uri.is_empty() {
+            0
+        } else if let Some(i) = self.links.iter().rposition(|l| l == uri) {
+            i as u16 + 1
+        } else if self.links.len() < usize::from(u16::MAX) {
+            self.links.push(uri.to_string());
+            self.links.len() as u16
+        } else {
+            0
+        };
     }
 
     pub fn row(&self, r: usize) -> &[Cell] {
@@ -478,6 +517,8 @@ impl Term {
         self.cells[r * self.cols + c] = Cell {
             ch,
             style: self.style,
+            link: self.link,
+            mark: std::mem::take(&mut self.mark_next),
         };
         if c + 1 < self.cols {
             self.cursor.1 += 1;
