@@ -40,6 +40,7 @@ cargo build --release
 | --- | --- |
 | New tab | `Ctrl+Shift+T` |
 | Close pane (last pane: close tab) | `Ctrl+Shift+W` |
+| Close tab | middle-click on the tab |
 | Split right / down | `Ctrl+Shift+D` / `Ctrl+Shift+E`: any pane, any direction, nested like tmux (up to 8 per tab, each new pane opens in the same directory) |
 | Focus the pane left / right / above / below | `Ctrl+Shift+Arrow` (wraps around), or click |
 | Previous / next pane in order | `Ctrl+Shift+[` / `Ctrl+Shift+]` |

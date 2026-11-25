@@ -92,7 +92,12 @@ impl TerminalView {
                     s.bg(color_of(theme::HOVER))
                 }
             })
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation());
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_aux_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
+                if ev.is_middle_click() {
+                    this.close_tab(i, window, cx);
+                }
+            }));
 
         let tab = if vertical {
             tab.w_full()
