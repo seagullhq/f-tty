@@ -6,16 +6,7 @@
 use gpui::*;
 
 mod app;
-mod assets;
-mod fonts;
-mod input;
-mod layout;
-mod pty;
-mod selection;
-mod settings_store;
-mod shells;
-mod term;
-mod theme;
+mod terminal;
 mod ui;
 
 use app::TerminalView;
@@ -35,10 +26,13 @@ pub(crate) const WINDOW_SIZE: Size<Pixels> = size(px(696.), px(608.));
 pub(crate) const MIN_WINDOW_SIZE: Size<Pixels> = size(px(320.), px(200.));
 
 fn main() {
-    Application::new()
-        .with_assets(assets::Assets)
+    app::startup::restrict_vulkan_drivers();
+    app::startup::limit_allocator_arenas();
+    gpui_platform::application()
+        .with_assets(ui::assets::Assets)
         .run(|cx: &mut App| {
-            cx.on_window_closed(|cx| {
+            ui::components::bind_text_input_keys(cx);
+            cx.on_window_closed(|cx, _| {
                 if cx.windows().is_empty() {
                     cx.quit();
                 }

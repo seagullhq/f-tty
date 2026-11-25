@@ -1,10 +1,17 @@
-//! Application state: terminal tabs and their lifecycle.
+//! Application state and behavior: tabs, input, selection, layout, settings and startup tuning.
 
-use crate::pty::Pty;
-use crate::settings_store;
-use crate::shells::{self, Shell};
-use crate::term::Emulator;
-use crate::{COLS, ROWS, layout};
+mod input;
+mod layout;
+mod search;
+mod selection;
+mod settings;
+pub(crate) mod startup;
+
+use crate::terminal::Emulator;
+use crate::terminal::pty::Pty;
+use crate::terminal::shells::{self, Shell};
+use crate::ui::components::Combobox;
+use crate::{COLS, ROWS};
 use gpui::*;
 use std::time::Duration;
 
@@ -18,10 +25,6 @@ pub(crate) enum TabPosition {
 
 impl TabPosition {
     pub(crate) const ALL: [Self; 4] = [Self::Top, Self::Bottom, Self::Left, Self::Right];
-
-    pub(crate) fn vertical(self) -> bool {
-        matches!(self, Self::Left | Self::Right)
-    }
 
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -50,6 +53,12 @@ pub(crate) struct Tab {
     pub(crate) pty: Option<Pty>,
     pub(crate) emu: Emulator,
     pub(crate) title: String,
+    /// Shell tag shown in the tab (see `Shell::badge`).
+    pub(crate) badge: String,
+    /// Accent color of the badge, unique among open tabs while possible.
+    pub(crate) tint: u32,
+    /// A bell rang while the tab was out of sight.
+    pub(crate) attention: bool,
     /// Changes on every grid resize: PTY resizes only start when the drag
     /// stops (the latest generation wins).
     pub(crate) resize_seq: u64,
@@ -65,7 +74,7 @@ pub(crate) struct Tab {
 }
 
 impl Tab {
-    fn terminal(id: usize, shell: &Shell) -> Self {
+    fn terminal(id: usize, shell: &Shell, tint: u32) -> Self {
         let mut emu = Emulator::new(COLS, ROWS);
         let pty = match Pty::spawn(COLS as u16, ROWS as u16, &shell.program) {
             Ok(pty) => Some(pty),
@@ -83,6 +92,9 @@ impl Tab {
             pty,
             emu,
             title: format!("Terminal {id}"),
+            badge: shell.badge(),
+            tint,
+            attention: false,
             resize_seq: 0,
             scroll: 0,
             scroll_acc: 0.,
@@ -104,6 +116,10 @@ pub(crate) struct TerminalView {
     pub(crate) active: usize,
     pub(crate) next_id: usize,
     pub(crate) tabs_position: TabPosition,
+    /// Width of the side tab list, changed by dragging its inner edge.
+    pub(crate) strip_width: Pixels,
+    /// Pointer x and strip width when a drag of the edge started.
+    pub(crate) strip_drag: Option<(Pixels, Pixels)>,
     pub(crate) shells: Vec<Shell>,
     pub(crate) shell: Shell,
     pub(crate) settings_open: bool,
@@ -111,21 +127,23 @@ pub(crate) struct TerminalView {
     pub(crate) line_height: Pixels,
     pub(crate) selection: Option<Selection>,
     pub(crate) selecting: bool,
+    /// Scrollback search bar, when open.
+    pub(crate) search: Option<search::Search>,
+    /// A left press was sent to the program, so its drag and release are too.
+    pub(crate) mouse_reported: bool,
     /// Family used by the terminal grid; changeable from settings.
     pub(crate) font: SharedString,
     pub(crate) fonts: Vec<String>,
-    pub(crate) font_query: String,
-    /// Whether the font combobox dropdown is expanded.
-    pub(crate) font_picker_open: bool,
+    pub(crate) font_picker: Combobox,
 }
 
 impl TerminalView {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
-        window.focus(&focus);
+        window.focus(&focus, cx);
         window.set_window_title("ftty");
 
-        let saved = settings_store::load();
+        let saved = settings::load();
         let shells = shells::available();
         let shell = if saved.shell.is_empty() {
             None
@@ -164,10 +182,14 @@ impl TerminalView {
 
         Self {
             focus,
-            tabs: vec![Tab::terminal(1, &shell)],
+            tabs: vec![Tab::terminal(1, &shell, layout::pick_tint(&[]))],
             active: 0,
             next_id: 2,
             tabs_position: saved.tabs_position,
+            strip_width: px(saved.strip)
+                .max(crate::ui::theme::STRIP_MIN)
+                .min(crate::ui::theme::STRIP_MAX),
+            strip_drag: None,
             shells,
             shell,
             settings_open: false,
@@ -175,10 +197,11 @@ impl TerminalView {
             line_height,
             selection: None,
             selecting: false,
+            search: None,
+            mouse_reported: false,
             font: font_family.into(),
             fonts,
-            font_query: String::new(),
-            font_picker_open: false,
+            font_picker: Combobox::new("Search fonts…", cx),
         }
     }
 
@@ -201,12 +224,26 @@ impl TerminalView {
     }
 
     /// Writes the current choices to the user config file (best effort).
-    fn save_settings(&self) {
-        settings_store::save(&settings_store::SavedSettings {
+    pub(crate) fn save_settings(&self) {
+        settings::save(&settings::SavedSettings {
             tabs_position: self.tabs_position,
             shell: self.shell.program.clone(),
             font: self.font.to_string(),
+            strip: self.strip_width.into(),
         });
+    }
+
+    /// Opens or closes the font dropdown, moving focus into or out of it.
+    pub(crate) fn toggle_font_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.font_picker.is_open() {
+            self.font_picker.close();
+            window.focus(&self.focus, cx);
+        } else {
+            self.font_picker.open(&self.font, &self.fonts, cx);
+            let handle = self.font_picker.focus_handle(cx);
+            window.focus(&handle, cx);
+        }
+        cx.notify();
     }
 
     /// Applies a font family to new renders and re-aligns the grid to it.
@@ -216,7 +253,8 @@ impl TerminalView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.font_picker_open = false;
+        self.font_picker.close();
+        window.focus(&self.focus, cx);
         if self.font == family {
             cx.notify();
             return;
@@ -229,8 +267,8 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Changes the tab list side while keeping the terminal the same size:
-    /// the window grows/shrinks by the space taken by the bar.
+    /// Changes the tab list side. The window keeps its size: the terminal
+    /// absorbs the bar, except when the window falls under the new minimum.
     pub(crate) fn set_tab_position(
         &mut self,
         position: TabPosition,
@@ -240,24 +278,16 @@ impl TerminalView {
         self.selection = None;
         self.selecting = false;
         if position != self.tabs_position {
-            let (dw, dh) = layout::size_delta(self.tabs_position, position);
             self.tabs_position = position;
             if !window.is_maximized() && !window.is_fullscreen() {
                 let current = window.bounds().size;
-                let target = size(current.width + dw, current.height + dh);
                 let min = layout::min_size(position);
-                window.resize(size(
-                    if target.width < min.width {
-                        min.width
-                    } else {
-                        target.width
-                    },
-                    if target.height < min.height {
-                        min.height
-                    } else {
-                        target.height
-                    },
-                ));
+                if current.width < min.width || current.height < min.height {
+                    window.resize(size(
+                        current.width.max(min.width),
+                        current.height.max(min.height),
+                    ));
+                }
             }
             self.save_settings();
         }
@@ -290,6 +320,13 @@ impl TerminalView {
                     let _ = pty.write(&response);
                 }
             }
+            if std::mem::take(&mut tab.emu.term.bell) && (i != self.active || self.settings_open) {
+                tab.attention = true;
+                received = true;
+            }
+            if i == self.active && !self.settings_open {
+                tab.attention = false;
+            }
             let added = tab.emu.term.history_len() - history_before;
             if tab.scroll > 0 && added > 0 {
                 // The text in view stays put while output arrives.
@@ -312,7 +349,12 @@ impl TerminalView {
     }
 
     pub(crate) fn open_tab(&mut self, cx: &mut Context<Self>) {
-        self.tabs.push(Tab::terminal(self.next_id, &self.shell));
+        let used: Vec<u32> = self.tabs.iter().map(|t| t.tint).collect();
+        self.tabs.push(Tab::terminal(
+            self.next_id,
+            &self.shell,
+            layout::pick_tint(&used),
+        ));
         self.next_id += 1;
         self.active = self.tabs.len() - 1;
         self.settings_open = false;
@@ -341,6 +383,7 @@ impl TerminalView {
             return;
         }
         self.tabs.remove(index);
+        startup::release_free_pages();
         self.selection = None;
         self.selecting = false;
         if self.tabs.is_empty() {

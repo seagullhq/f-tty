@@ -1,8 +1,8 @@
 //! Rendering of the terminal grid.
 
 use crate::app::TerminalView;
-use crate::term::{Cell, DEFAULT_BG, DEFAULT_FG, Style};
-use crate::theme::color_of;
+use crate::terminal::{Cell, DEFAULT_BG, DEFAULT_FG, Style};
+use crate::ui::theme::color_of;
 use gpui::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -14,6 +14,7 @@ struct RunKey {
 
 /// Length to draw: trailing unstyled spaces should not be laid out or
 /// painted, but the cursor must stay visible even on an empty cell.
+/// History lines are stored without their trailing blanks.
 fn line_len(cells: &[Cell], cursor_col: Option<usize>) -> usize {
     let mut len = cells.len();
     while len > 0 {
@@ -24,7 +25,7 @@ fn line_len(cells: &[Cell], cursor_col: Option<usize>) -> usize {
             break;
         }
     }
-    len
+    len.max(cursor_col.map_or(0, |col| col + 1))
 }
 
 /// Builds a row as a single text with contiguous style runs.
@@ -41,7 +42,8 @@ fn line_from_cells(cells: &[Cell], cursor_col: Option<usize>, family: &SharedStr
     let mut runs: Vec<TextRun> = Vec::new();
     let mut last: Option<RunKey> = None;
 
-    for (col, cell) in cells[..len].iter().enumerate() {
+    for col in 0..len {
+        let cell = cells.get(col).copied().unwrap_or_default();
         let is_cursor = cursor_col == Some(col);
         let mut fg = cell.style.fg.resolve(DEFAULT_FG);
         let mut bg = cell.style.bg.resolve(DEFAULT_BG);
@@ -116,17 +118,19 @@ pub(crate) fn terminal_screen(view: &TerminalView, cx: &mut Context<TerminalView
             MouseButton::Left,
             cx.listener(TerminalView::on_terminal_mouse_up),
         )
-        .on_scroll_wheel(cx.listener(TerminalView::on_terminal_scroll))
+        .on_scroll(cx.listener(TerminalView::on_terminal_scroll))
         .font_family(view.font.clone())
         .text_sm()
         .children(lines)
         .children(view.selection_overlays(term))
+        .children(view.search_overlays(term, top))
+        .children(view.search_bar())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::term::Color;
+    use crate::terminal::Color;
 
     fn cells(text: &str, width: usize) -> Vec<Cell> {
         let mut cells = vec![Cell::default(); width];

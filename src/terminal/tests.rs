@@ -40,6 +40,15 @@ fn scrollback_is_capped() {
 }
 
 #[::core::prelude::v1::test]
+fn history_lines_are_stored_without_trailing_blanks() {
+    let mut emu = Emulator::new(20, 1);
+    emu.feed(b"hi\r\n");
+    assert_eq!(emu.term.line(0).len(), 2);
+    // Screen rows keep the full grid width.
+    assert_eq!(emu.term.line(1).len(), 20);
+}
+
+#[::core::prelude::v1::test]
 fn resize_wider_joins_soft_wrapped_lines() {
     let mut emu = Emulator::new(4, 3);
     emu.feed(b"abcdefgh");
@@ -134,4 +143,46 @@ fn title_falls_back_to_cwd_then_default() {
 
     emu.term.title = Some("vim".into());
     assert_eq!(emu.term.display_title(7), "vim");
+}
+
+#[::core::prelude::v1::test]
+fn alt_screen_restores_main_and_skips_history() {
+    let mut emu = Emulator::new(8, 2);
+    emu.feed(b"main\x1b[?1049hvim\r\nx\r\ny\r\n");
+    assert_eq!(emu.term.history_len(), 0);
+    emu.feed(b"\x1b[?1049l");
+    assert_eq!(line_text(emu.term.row(0)), "main");
+    assert!(!emu.term.in_alt_screen());
+}
+
+#[::core::prelude::v1::test]
+fn scroll_region_keeps_outside_rows() {
+    let mut emu = Emulator::new(4, 4);
+    emu.feed(b"a\r\nb\r\nc\r\nd\x1b[2;3r\x1b[3;1H\n");
+    let rows: Vec<String> = (0..4).map(|r| line_text(emu.term.row(r))).collect();
+    assert_eq!(rows, ["a", "c", "", "d"]);
+    assert_eq!(emu.term.history_len(), 0);
+}
+
+#[::core::prelude::v1::test]
+fn insert_delete_lines_and_chars() {
+    let mut emu = Emulator::new(5, 3);
+    emu.feed(b"abcde\r\nfg\r\nhi\x1b[2;1H\x1b[L");
+    assert_eq!(line_text(emu.term.row(1)), "");
+    assert_eq!(line_text(emu.term.row(2)), "fg");
+    emu.feed(b"\x1b[1;2H\x1b[2P");
+    assert_eq!(line_text(emu.term.row(0)), "ade");
+    emu.feed(b"\x1b[@");
+    assert_eq!(line_text(emu.term.row(0)), "a de");
+}
+
+#[::core::prelude::v1::test]
+fn private_modes_toggle() {
+    let mut emu = Emulator::new(4, 2);
+    emu.feed(b"\x1b[?1h\x1b[?2004h\x1b[?1002h\x1b[?1006h");
+    let t = &emu.term;
+    assert!(t.app_cursor && t.bracketed_paste && t.mouse_sgr);
+    assert_eq!(t.mouse, 1002);
+    emu.feed(b"\x1b[?1002l");
+    assert_eq!(emu.term.mouse, 0);
 }

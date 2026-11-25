@@ -105,6 +105,7 @@ impl Perform for Term {
 
     fn execute(&mut self, byte: u8) {
         match byte {
+            0x07 => self.bell = true,
             0x08 => {
                 self.wrap_pending = false;
                 self.cursor.1 = self.cursor.1.saturating_sub(1);
@@ -124,12 +125,10 @@ impl Perform for Term {
 
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         if !intermediates.is_empty() {
-            // Private mode: ESC[?25h / ESC[?25l for the cursor
             if intermediates.first() == Some(&b'?') && (action == 'h' || action == 'l') {
+                let on = action == 'h';
                 for p in params.iter() {
-                    if p.first() == Some(&25) {
-                        self.cursor_visible = action == 'h';
-                    }
+                    self.set_private_mode(p.first().copied().unwrap_or(0), on);
                 }
             }
             return;
@@ -158,6 +157,18 @@ impl Perform for Term {
                 _ => self.clear(r * cols, (r + 1) * cols),
             },
             'm' => self.sgr(params),
+            'E' => self.goto(r + arg(params, 0, 1), 0),
+            'F' => self.goto(r.saturating_sub(arg(params, 0, 1)), 0),
+            'L' => self.insert_lines(arg(params, 0, 1)),
+            'M' => self.delete_lines(arg(params, 0, 1)),
+            '@' => self.insert_chars(arg(params, 0, 1)),
+            'P' => self.delete_chars(arg(params, 0, 1)),
+            'X' => self.erase_chars(arg(params, 0, 1)),
+            'S' => self.scroll_region_up(self.top, self.bottom, arg(params, 0, 1)),
+            'T' => self.scroll_region_down(self.top, self.bottom, arg(params, 0, 1)),
+            'r' => self.set_region(arg(params, 0, 1) - 1, arg(params, 1, rows) - 1),
+            's' => self.saved_cursor = self.cursor,
+            'u' => self.cursor = self.saved_cursor,
             'n' if raw(params, 0) == 6 => self.dsr_pending = true,
             _ => {}
         }
@@ -168,6 +179,12 @@ impl Perform for Term {
             match byte {
                 b'7' => self.saved_cursor = self.cursor,
                 b'8' => self.cursor = self.saved_cursor,
+                b'D' => self.linefeed(false),
+                b'E' => {
+                    self.cursor.1 = 0;
+                    self.linefeed(false);
+                }
+                b'M' => self.reverse_index(),
                 _ => {}
             }
         }

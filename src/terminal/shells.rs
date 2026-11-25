@@ -11,6 +11,22 @@ pub struct Shell {
     pub program: String,
 }
 
+impl Shell {
+    /// Short tag for tab labels: PS, C:, bsh, zsh...
+    pub fn badge(&self) -> String {
+        let stem = std::path::Path::new(&self.program)
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        match stem.as_str() {
+            "pwsh" | "powershell" => "PS".into(),
+            "cmd" => "C:".into(),
+            "bash" => "bsh".into(),
+            other => other.chars().take(3).collect(),
+        }
+    }
+}
+
 pub fn available() -> Vec<Shell> {
     #[cfg(unix)]
     let shells = unix_shells();

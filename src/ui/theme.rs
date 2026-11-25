@@ -11,15 +11,17 @@ pub fn color_of(c: u32) -> Hsla {
 }
 
 // Surfaces
-pub const CHROME: u32 = 0x262626;
-pub const HOVER: u32 = 0x303030;
-pub const ACTIVE: u32 = 0x343434;
-pub const BORDER: u32 = 0x3a3a3a;
+pub const CHROME: u32 = 0x222222;
+pub const HOVER: u32 = 0x2c2c2c;
+pub const ACTIVE: u32 = 0x303030;
+pub const BORDER: u32 = 0x363636;
 pub const DANGER: u32 = 0xc42b1c;
 pub const SELECTION: u32 = 0x264f78;
 
 // Text
-pub const MUTED: u32 = 0x9a9a9a;
+/// Solid fill behind tab badges: dark enough for every tab color to read.
+pub const BADGE_BG: u32 = 0x141414;
+pub const MUTED: u32 = 0x8c8c8c;
 pub const ACCENT: u32 = 0x4ec9b0;
 
 // Compact measurements
@@ -31,9 +33,19 @@ pub const TAB_MIN_WIDTH: Pixels = px(80.);
 pub const TAB_HEIGHT: Pixels = px(26.);
 pub const TAB_PADDING: Pixels = px(8.);
 pub const STRIP_WIDTH: Pixels = px(140.);
+/// Side tab list limits: at the minimum only a letter per tab is shown.
+pub const STRIP_MIN: Pixels = px(40.);
+pub const STRIP_MAX: Pixels = px(320.);
+/// Below this width the side list drops titles and close buttons.
+pub const STRIP_COMPACT: Pixels = px(72.);
 pub const CONTROL_SIZE: Pixels = px(24.);
 pub const CONTROL_GAP: Pixels = px(2.);
 pub const CONTENT_PADDING: Pixels = px(6.);
+
+/// Accent per tab, picked by tab id so neighbours differ.
+pub const TAB_COLORS: [u32; 8] = [
+    0x4fc1ff, 0xb5cea8, 0xe6a37e, 0xd7a0d2, 0xdcdcaa, 0x4ec9b0, 0xff8f88, 0x9cdcfe,
+];
 
 // Radii
 pub const WINDOW_RADIUS: Pixels = px(12.);

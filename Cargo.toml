@@ -5,7 +5,13 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-gpui = "0.2.2"
+gpui = { git = "https://github.com/zed-industries/zed", rev = "f38d614b4b58bb44cc19d08ef5dd3efba918f9a3" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "f38d614b4b58bb44cc19d08ef5dd3efba918f9a3", features = [
+    "font-kit",
+    "wayland",
+    "x11",
+    "runtime_shaders",
+] }
 portable-pty = "0.9"
 vte = "0.13"
 
@@ -13,7 +19,7 @@ vte = "0.13"
 raw-window-handle = "0.6"
 
 [profile.release]
-opt-level = 3
+opt-level = "s"
 lto = "thin"
 codegen-units = 1
 panic = "abort"

@@ -4,12 +4,14 @@ use crate::app::TabPosition;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct SavedSettings {
     pub tabs_position: TabPosition,
     /// Program of the shell selected for new tabs (empty = auto-detect).
     pub shell: String,
     pub font: String,
+    /// Side tab list width in pixels.
+    pub strip: f32,
 }
 
 impl Default for SavedSettings {
@@ -18,6 +20,7 @@ impl Default for SavedSettings {
             tabs_position: TabPosition::Top,
             shell: String::new(),
             font: crate::FONT.to_string(),
+            strip: crate::ui::theme::STRIP_WIDTH.into(),
         }
     }
 }
@@ -60,10 +63,11 @@ pub(crate) fn save(settings: &SavedSettings) {
 
 fn encode(settings: &SavedSettings) -> String {
     format!(
-        "position={}\nshell={}\nfont={}\n",
+        "position={}\nshell={}\nfont={}\nstrip={}\n",
         settings.tabs_position.label(),
         one_line(&settings.shell),
         one_line(&settings.font),
+        settings.strip,
     )
 }
 
@@ -82,6 +86,11 @@ fn decode(contents: &str) -> SavedSettings {
             }
             "shell" => settings.shell = value.to_string(),
             "font" if !value.trim().is_empty() => settings.font = value.to_string(),
+            "strip" => {
+                if let Ok(width) = value.parse::<f32>() {
+                    settings.strip = width;
+                }
+            }
             _ => {}
         }
     }
@@ -103,6 +112,7 @@ mod tests {
             tabs_position: TabPosition::Left,
             shell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe".into(),
             font: "Cascadia Mono".into(),
+            strip: 96.,
         };
         assert_eq!(decode(&encode(&saved)), saved);
     }

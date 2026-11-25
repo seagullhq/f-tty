@@ -1,17 +1,46 @@
 //! Horizontal and vertical tab lists.
 
-use super::icon;
-use crate::app::TerminalView;
-use crate::term::DEFAULT_FG;
-use crate::theme::{self, color_of};
+use crate::app::{TabPosition, TerminalView};
+use crate::terminal::DEFAULT_FG;
+use crate::ui::components::icon;
+use crate::ui::theme::{self, color_of};
+use gpui::prelude::FluentBuilder;
 use gpui::*;
 
 impl TerminalView {
     /// A horizontal tab (bar) or vertical tab (side panel).
-    pub(super) fn tab(&self, i: usize, vertical: bool, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn tab(&self, i: usize, vertical: bool, cx: &mut Context<Self>) -> impl IntoElement {
         // With Settings open no tab is active: the space belongs to settings.
         let active = !self.settings_open && i == self.active;
         let group = format!("tab-{i}");
+        let tint = self.tabs[i].tint;
+        let badge = div()
+            .relative()
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .h(px(16.))
+            .min_w(px(22.))
+            .px(px(3.))
+            .rounded(theme::CHIP_RADIUS)
+            .bg(color_of(theme::BADGE_BG))
+            .text_color(color_of(tint))
+            .text_size(px(10.))
+            .child(self.tabs[i].badge.clone())
+            .when(self.tabs[i].attention, |b| {
+                // Bell rang while this tab was hidden.
+                b.child(
+                    div()
+                        .absolute()
+                        .top(px(-2.))
+                        .right(px(-2.))
+                        .size(px(7.))
+                        .rounded_full()
+                        .bg(color_of(theme::ACCENT)),
+                )
+            });
+        let compact = vertical && self.strip_width < theme::STRIP_COMPACT;
 
         let close = div()
             .id(("tab-close", i))
@@ -78,8 +107,9 @@ impl TerminalView {
                 .flex_1()
                 .items_center()
                 .h_full()
-                .pl(theme::TAB_PADDING)
-                .truncate()
+                .when(compact, |d| d.justify_center())
+                .when(!compact, |d| d.pl(theme::TAB_PADDING))
+                .min_w(px(0.))
                 .cursor_pointer()
                 .text_xs()
                 .text_color(color_of(if active { DEFAULT_FG } else { theme::MUTED }))
@@ -90,12 +120,18 @@ impl TerminalView {
                     this.selecting = false;
                     cx.notify();
                 }))
-                .child(self.tabs[i].title.clone()),
+                .gap_2()
+                .child(badge)
+                // The ellipsis needs a block-level text box; as a direct flex
+                // child of the title the text would just be clipped.
+                .when(!compact, |d| {
+                    d.child(div().truncate().child(self.tabs[i].title.clone()))
+                }),
         )
-        .child(close)
+        .when(!compact, |t| t.child(close))
     }
 
-    pub(super) fn new_tab_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn new_tab_button(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("new-tab")
             .flex()
@@ -118,7 +154,7 @@ impl TerminalView {
     }
 
     /// Bottom tab list: rounded chips above the window edge.
-    pub(super) fn bottom_tabs(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn bottom_tabs(&self, cx: &mut Context<Self>) -> Div {
         let mut row = div().w_full().flex_none().flex().items_center().gap_1();
 
         for i in 0..self.tabs.len() {
@@ -129,14 +165,45 @@ impl TerminalView {
     }
 
     /// Vertical side tab list, browser style, as chips on a single surface.
-    pub(super) fn side_tabs(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn side_tabs(&self, cx: &mut Context<Self>) -> Div {
+        let compact = self.strip_width < theme::STRIP_COMPACT;
+        // Drag handle on the edge facing the terminal; it reaches into the gap.
+        let handle = div()
+            .id("strip-handle")
+            .absolute()
+            .top_0()
+            .h_full()
+            .w(px(8.))
+            .cursor_col_resize()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, _, cx| {
+                    cx.stop_propagation();
+                    // Double click restores the default width.
+                    if ev.click_count >= 2 {
+                        this.strip_width = theme::STRIP_WIDTH;
+                        this.strip_drag = None;
+                        this.save_settings();
+                        cx.notify();
+                    } else {
+                        this.strip_drag = Some((ev.position.x, this.strip_width));
+                    }
+                }),
+            );
+        let handle = if self.tabs_position == TabPosition::Left {
+            handle.right(px(-4.))
+        } else {
+            handle.left(px(-4.))
+        };
         let mut panel = div()
+            .relative()
             .flex_none()
-            .w(theme::STRIP_WIDTH)
+            .w(self.strip_width)
             .h_full()
             .flex()
             .flex_col()
             .gap_1()
+            .child(handle)
             .child(
                 div()
                     .h(theme::TAB_HEIGHT)
@@ -145,11 +212,11 @@ impl TerminalView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .pl(theme::TAB_PADDING)
-                    .pr(px(2.))
+                    .when(compact, |d| d.justify_center())
+                    .when(!compact, |d| d.pl(theme::TAB_PADDING).pr(px(2.)))
                     .text_xs()
                     .text_color(color_of(theme::MUTED))
-                    .child("Tabs")
+                    .when(!compact, |d| d.child("Tabs"))
                     .child(self.new_tab_button(cx)),
             );
 

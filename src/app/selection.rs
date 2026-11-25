@@ -1,8 +1,8 @@
 //! Scrollback navigation and text selection.
 
 use crate::app::TerminalView;
-use crate::term::Term;
-use crate::theme::{SELECTION, color_of};
+use crate::terminal::Term;
+use crate::ui::theme::{SELECTION, color_of};
 use gpui::*;
 
 impl TerminalView {

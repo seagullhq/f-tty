@@ -4,6 +4,14 @@ use super::{Cell, Color, MAX_SCROLLBACK, Style};
 use std::collections::VecDeque;
 use vte::Params;
 
+/// Main screen parked while the alternate screen (vim, less, htop) is shown.
+struct Screen {
+    cells: Vec<Cell>,
+    wrapped: Vec<bool>,
+    cursor: (usize, usize),
+    saved_cursor: (usize, usize),
+}
+
 pub struct Term {
     pub cols: usize,
     pub rows: usize,
@@ -28,6 +36,20 @@ pub struct Term {
     pub title: Option<String>,
     /// Cartella corrente comunicata tramite OSC 7 (URL `file://`).
     pub cwd: Option<String>,
+    /// Scroll region (inclusive rows), set by DECSTBM.
+    pub(super) top: usize,
+    pub(super) bottom: usize,
+    alt: Option<Screen>,
+    /// DECCKM: arrow keys send `ESC O x` instead of `ESC [ x`.
+    pub app_cursor: bool,
+    /// Bracketed paste (2004).
+    pub bracketed_paste: bool,
+    /// Mouse reporting level: 0 off, else 1000 / 1002 / 1003.
+    pub mouse: u16,
+    /// SGR mouse encoding (1006).
+    pub mouse_sgr: bool,
+    /// BEL received since the flag was last taken.
+    pub bell: bool,
 }
 
 impl Term {
@@ -47,6 +69,14 @@ impl Term {
             dsr_pending: false,
             title: None,
             cwd: None,
+            top: 0,
+            bottom: rows - 1,
+            alt: None,
+            app_cursor: false,
+            bracketed_paste: false,
+            mouse: 0,
+            mouse_sgr: false,
+            bell: false,
         }
     }
 
@@ -56,6 +86,18 @@ impl Term {
 
     pub fn history_len(&self) -> usize {
         self.scrollback.len()
+    }
+
+    /// Appends a line to the history, dropping trailing blank cells: most
+    /// lines are much shorter than the grid, and this is most of the tab's
+    /// memory. The reader treats missing cells as blanks.
+    fn push_history(&mut self, line: Box<[Cell]>, wrapped: bool) {
+        self.scrollback.push_back(line);
+        self.scrollback_wrapped.push_back(wrapped);
+        if self.scrollback.len() > MAX_SCROLLBACK {
+            self.scrollback.pop_front();
+            self.scrollback_wrapped.pop_front();
+        }
     }
 
     /// Combined buffer line: 0 = oldest in scrollback, history_len = first
@@ -103,6 +145,51 @@ impl Term {
     /// The font never changes: the window width changes how many columns are
     /// shown, so the text has to move with it.
     pub fn resize(&mut self, cols: usize, rows: usize) {
+        // The alternate screen is blank-and-redrawn: apps repaint on SIGWINCH.
+        let was_alt = self.alt.is_some();
+        if was_alt {
+            self.leave_alt();
+        }
+        self.resize_main(cols, rows);
+        self.top = 0;
+        self.bottom = self.rows - 1;
+        if was_alt {
+            self.enter_alt();
+        }
+    }
+
+    pub fn in_alt_screen(&self) -> bool {
+        self.alt.is_some()
+    }
+
+    pub(super) fn enter_alt(&mut self) {
+        if self.alt.is_some() {
+            return;
+        }
+        let blank = vec![Cell::default(); self.cols * self.rows];
+        self.alt = Some(Screen {
+            cells: std::mem::replace(&mut self.cells, blank),
+            wrapped: std::mem::replace(&mut self.wrapped, vec![false; self.rows]),
+            cursor: self.cursor,
+            saved_cursor: self.saved_cursor,
+        });
+        self.top = 0;
+        self.bottom = self.rows - 1;
+    }
+
+    pub(super) fn leave_alt(&mut self) {
+        if let Some(main) = self.alt.take() {
+            self.cells = main.cells;
+            self.wrapped = main.wrapped;
+            self.cursor = main.cursor;
+            self.saved_cursor = main.saved_cursor;
+            self.wrap_pending = false;
+            self.top = 0;
+            self.bottom = self.rows - 1;
+        }
+    }
+
+    fn resize_main(&mut self, cols: usize, rows: usize) {
         let cols = cols.max(1);
         let rows = rows.max(1);
         if cols == self.cols {
@@ -192,12 +279,7 @@ impl Term {
         self.scrollback.clear();
         self.scrollback_wrapped.clear();
         for (line, is_wrapped) in new_lines[..split].iter().zip(&new_wrapped[..split]) {
-            self.scrollback.push_back(line.clone().into_boxed_slice());
-            self.scrollback_wrapped.push_back(*is_wrapped);
-            if self.scrollback.len() > MAX_SCROLLBACK {
-                self.scrollback.pop_front();
-                self.scrollback_wrapped.pop_front();
-            }
+            self.push_history(trimmed(line), *is_wrapped);
         }
 
         let mut cells = Vec::with_capacity(rows * cols);
@@ -254,26 +336,137 @@ impl Term {
 
     pub(super) fn linefeed(&mut self, soft_wrap: bool) {
         self.wrap_pending = false;
-        if self.cursor.0 + 1 < self.rows {
+        if self.cursor.0 == self.bottom {
+            self.scroll_region_up(self.top, self.bottom, 1);
+        } else if self.cursor.0 + 1 < self.rows {
             self.cursor.0 += 1;
-        } else {
-            self.scroll_up();
         }
         self.wrapped[self.cursor.0] = soft_wrap;
     }
 
-    fn scroll_up(&mut self) {
-        let top: Box<[Cell]> = self.cells[..self.cols].into();
-        self.scrollback.push_back(top);
-        self.scrollback_wrapped.push_back(self.wrapped[0]);
-        if self.scrollback.len() > MAX_SCROLLBACK {
-            self.scrollback.pop_front();
-            self.scrollback_wrapped.pop_front();
+    /// Reverse index: cursor up, scrolling the region down at its top.
+    pub(super) fn reverse_index(&mut self) {
+        self.wrap_pending = false;
+        if self.cursor.0 == self.top {
+            self.scroll_region_down(self.top, self.bottom, 1);
+        } else {
+            self.cursor.0 = self.cursor.0.saturating_sub(1);
         }
-        self.cells.copy_within(self.cols.., 0);
-        self.wrapped.copy_within(1.., 0);
-        let start = (self.rows - 1) * self.cols;
-        self.cells[start..].fill(Cell::default());
+    }
+
+    /// Scrolls rows `top..=bottom` up. Lines leaving the top of the main
+    /// screen go to the scrollback; region and alternate-screen scrolls don't.
+    pub(super) fn scroll_region_up(&mut self, top: usize, bottom: usize, n: usize) {
+        let cols = self.cols;
+        for _ in 0..n.min(bottom + 1 - top) {
+            if top == 0 && self.alt.is_none() {
+                let line = trimmed(&self.cells[..cols]);
+                let wrapped = self.wrapped[0];
+                self.push_history(line, wrapped);
+            }
+            self.cells
+                .copy_within((top + 1) * cols..(bottom + 1) * cols, top * cols);
+            self.wrapped.copy_within(top + 1..=bottom, top);
+            self.cells[bottom * cols..(bottom + 1) * cols].fill(Cell::default());
+            self.wrapped[bottom] = false;
+        }
+    }
+
+    pub(super) fn scroll_region_down(&mut self, top: usize, bottom: usize, n: usize) {
+        let cols = self.cols;
+        for _ in 0..n.min(bottom + 1 - top) {
+            self.cells
+                .copy_within(top * cols..bottom * cols, (top + 1) * cols);
+            self.wrapped.copy_within(top..bottom, top + 1);
+            self.cells[top * cols..(top + 1) * cols].fill(Cell::default());
+            self.wrapped[top] = false;
+        }
+    }
+
+    /// DECSET / DECRST.
+    pub(super) fn set_private_mode(&mut self, mode: u16, on: bool) {
+        match mode {
+            1 => self.app_cursor = on,
+            25 => self.cursor_visible = on,
+            47 | 1047 | 1049 => {
+                if on {
+                    self.enter_alt();
+                } else {
+                    self.leave_alt();
+                }
+            }
+            1000 | 1002 | 1003 => {
+                if on {
+                    self.mouse = mode;
+                } else if self.mouse == mode {
+                    self.mouse = 0;
+                }
+            }
+            1006 => self.mouse_sgr = on,
+            2004 => self.bracketed_paste = on,
+            _ => {}
+        }
+    }
+
+    pub(super) fn set_region(&mut self, top: usize, bottom: usize) {
+        let bottom = bottom.min(self.rows - 1);
+        if top < bottom {
+            self.top = top;
+            self.bottom = bottom;
+        }
+        self.goto(0, 0);
+    }
+
+    pub(super) fn insert_lines(&mut self, n: usize) {
+        if (self.top..=self.bottom).contains(&self.cursor.0) {
+            self.scroll_region_down(self.cursor.0, self.bottom, n);
+            self.cursor.1 = 0;
+            self.wrap_pending = false;
+        }
+    }
+
+    pub(super) fn delete_lines(&mut self, n: usize) {
+        if (self.top..=self.bottom).contains(&self.cursor.0) {
+            // Deleted lines are discarded, not sent to the scrollback.
+            let cols = self.cols;
+            let (r, bottom) = (self.cursor.0, self.bottom);
+            for _ in 0..n.min(bottom + 1 - r) {
+                self.cells
+                    .copy_within((r + 1) * cols..(bottom + 1) * cols, r * cols);
+                self.wrapped.copy_within(r + 1..=bottom, r);
+                self.cells[bottom * cols..(bottom + 1) * cols].fill(Cell::default());
+                self.wrapped[bottom] = false;
+            }
+            self.cursor.1 = 0;
+            self.wrap_pending = false;
+        }
+    }
+
+    /// ICH: shifts the rest of the row right, opening `n` blanks at the cursor.
+    pub(super) fn insert_chars(&mut self, n: usize) {
+        let (r, c) = self.cursor;
+        let row = &mut self.cells[r * self.cols..(r + 1) * self.cols];
+        let n = n.min(self.cols - c);
+        row.copy_within(c..self.cols - n, c + n);
+        row[c..c + n].fill(Cell::default());
+        self.wrap_pending = false;
+    }
+
+    /// DCH: removes `n` cells at the cursor, pulling the rest of the row left.
+    pub(super) fn delete_chars(&mut self, n: usize) {
+        let (r, c) = self.cursor;
+        let row = &mut self.cells[r * self.cols..(r + 1) * self.cols];
+        let n = n.min(self.cols - c);
+        row.copy_within(c + n.., c);
+        row[self.cols - n..].fill(Cell::default());
+        self.wrap_pending = false;
+    }
+
+    /// ECH: blanks `n` cells from the cursor without moving anything.
+    pub(super) fn erase_chars(&mut self, n: usize) {
+        let (r, c) = self.cursor;
+        let start = r * self.cols + c;
+        self.clear(start, start + n.min(self.cols - c));
     }
 
     pub(super) fn put(&mut self, ch: char) {
@@ -356,6 +549,15 @@ impl Term {
             i += 1;
         }
     }
+}
+
+/// A history line without its trailing blank cells.
+fn trimmed(cells: &[Cell]) -> Box<[Cell]> {
+    let end = cells
+        .iter()
+        .rposition(|cell| *cell != Cell::default())
+        .map_or(0, |i| i + 1);
+    cells[..end].into()
 }
 
 /// Position of a physical line inside its logical (soft-wrapped) line:

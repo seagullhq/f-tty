@@ -1,9 +1,9 @@
 //! Top bar composition.
 
-use super::icon;
 use crate::app::{TabPosition, TerminalView};
-use crate::term::DEFAULT_FG;
-use crate::theme::{self, color_of};
+use crate::terminal::DEFAULT_FG;
+use crate::ui::components::{icon, window_controls};
+use crate::ui::theme::{self, color_of};
 use gpui::*;
 
 impl TerminalView {
@@ -73,7 +73,7 @@ impl TerminalView {
                 .h_full()
                 .gap(theme::CONTROL_GAP)
                 .child(self.settings_button(cx))
-                .child(self.window_controls(window))
+                .child(window_controls(window))
         };
 
         bar.child(

@@ -2,14 +2,14 @@
 
 use crate::MIN_WINDOW_SIZE;
 use crate::app::{TabPosition, TerminalView};
-use crate::theme;
+use crate::ui::theme;
 use gpui::*;
 
 impl TerminalView {
     pub(crate) fn text_origin(&self) -> Point<Pixels> {
         let mut x = theme::GAP + px(1.) + theme::CONTENT_PADDING;
         if self.tabs_position == TabPosition::Left {
-            x += theme::STRIP_WIDTH + theme::GAP;
+            x += self.strip_width + theme::GAP;
         }
         point(x, theme::BAR_HEIGHT + px(1.) + px(2.))
     }
@@ -19,7 +19,7 @@ impl TerminalView {
         let (strip_w, strip_h) = match self.tabs_position {
             TabPosition::Top => (px(0.), px(0.)),
             TabPosition::Bottom => (px(0.), theme::TAB_HEIGHT + theme::GAP),
-            TabPosition::Left | TabPosition::Right => (theme::STRIP_WIDTH + theme::GAP, px(0.)),
+            TabPosition::Left | TabPosition::Right => (self.strip_width + theme::GAP, px(0.)),
         };
         let width = bounds.width - theme::GAP * 2. - strip_w - px(2.) - theme::CONTENT_PADDING * 2.;
         let height = bounds.height
@@ -42,6 +42,15 @@ pub(crate) fn active_after_close(active: usize, removed: usize, remaining: usize
     active.min(remaining - 1)
 }
 
+/// Palette color used by the fewest open tabs (first one on ties), so
+/// neighbours stay distinguishable until the palette runs out.
+pub(crate) fn pick_tint(used: &[u32]) -> u32 {
+    *theme::TAB_COLORS
+        .iter()
+        .min_by_key(|c| used.iter().filter(|u| u == c).count())
+        .unwrap()
+}
+
 /// Minimum window size for the current layout: side tabs need more width,
 /// bottom tabs need more height.
 pub(crate) fn min_size(position: TabPosition) -> Size<Pixels> {
@@ -52,26 +61,10 @@ pub(crate) fn min_size(position: TabPosition) -> Size<Pixels> {
             MIN_WINDOW_SIZE.height + theme::TAB_HEIGHT + theme::GAP,
         ),
         TabPosition::Left | TabPosition::Right => size(
-            MIN_WINDOW_SIZE.width + theme::STRIP_WIDTH + theme::GAP,
+            MIN_WINDOW_SIZE.width + theme::STRIP_MIN + theme::GAP,
             MIN_WINDOW_SIZE.height,
         ),
     }
-}
-
-/// Window size delta when the tab list changes side, so the terminal keeps
-/// the same columns/rows.
-pub(crate) fn size_delta(old: TabPosition, new: TabPosition) -> (Pixels, Pixels) {
-    let width = match (old.vertical(), new.vertical()) {
-        (true, false) => -(theme::STRIP_WIDTH + theme::GAP),
-        (false, true) => theme::STRIP_WIDTH + theme::GAP,
-        _ => px(0.),
-    };
-    let height = match (old == TabPosition::Bottom, new == TabPosition::Bottom) {
-        (true, false) => -(theme::TAB_HEIGHT + theme::GAP),
-        (false, true) => theme::TAB_HEIGHT + theme::GAP,
-        _ => px(0.),
-    };
-    (width, height)
 }
 
 #[cfg(test)]
@@ -89,34 +82,46 @@ mod tests {
         );
         assert_eq!(
             min_size(Left).width,
-            MIN_WINDOW_SIZE.width + theme::STRIP_WIDTH + theme::GAP
+            MIN_WINDOW_SIZE.width + theme::STRIP_MIN + theme::GAP
         );
         assert_eq!(min_size(Left).height, MIN_WINDOW_SIZE.height);
     }
 
+    fn luminance(c: u32) -> f32 {
+        let lin = |v: u32| {
+            let v = v as f32 / 255.;
+            if v <= 0.03928 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * lin(c >> 16 & 0xff) + 0.7152 * lin(c >> 8 & 0xff) + 0.0722 * lin(c & 0xff)
+    }
+
+    fn contrast(a: u32, b: u32) -> f32 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
     #[::core::prelude::v1::test]
-    fn layout_change_keeps_terminal_size() {
-        use TabPosition::*;
-        assert_eq!(
-            size_delta(Top, Bottom),
-            (px(0.), theme::TAB_HEIGHT + theme::GAP)
-        );
-        assert_eq!(
-            size_delta(Bottom, Top),
-            (px(0.), -(theme::TAB_HEIGHT + theme::GAP))
-        );
-        assert_eq!(
-            size_delta(Top, Left),
-            (theme::STRIP_WIDTH + theme::GAP, px(0.))
-        );
-        assert_eq!(size_delta(Left, Right), (px(0.), px(0.)));
-        assert_eq!(
-            size_delta(Right, Bottom),
-            (
-                -(theme::STRIP_WIDTH + theme::GAP),
-                theme::TAB_HEIGHT + theme::GAP
-            )
-        );
+    fn tab_colors_are_readable_and_distinct() {
+        for &tint in &theme::TAB_COLORS {
+            assert!(contrast(tint, theme::BADGE_BG) >= 4.5, "{tint:06x} text");
+            // The badge itself must stand out from the tab (non-text 3:1).
+            assert!(contrast(tint, theme::CHROME) >= 3., "{tint:06x} shape");
+        }
+        let mut seen = std::collections::HashSet::new();
+        assert!(theme::TAB_COLORS.iter().all(|c| seen.insert(c)));
+    }
+
+    #[::core::prelude::v1::test]
+    fn pick_tint_spreads_then_reuses() {
+        let first = pick_tint(&[]);
+        let second = pick_tint(&[first]);
+        assert_ne!(first, second);
+        let all = theme::TAB_COLORS;
+        assert_eq!(pick_tint(&all), all[0]);
     }
 
     #[::core::prelude::v1::test]
