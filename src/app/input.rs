@@ -108,12 +108,9 @@ impl TerminalView {
                 tab.scroll = 0;
                 tab.scroll_acc = 0.;
                 // Enter submits the line (the shell draws a fresh prompt);
-                // Ctrl+C cancels it. Any other key leaves input pending.
+                // Ctrl+C cancels it.
                 if bytes == b"\r" || bytes == b"\x03" {
-                    tab.input_pending = false;
                     tab.busy_since = (bytes == b"\r").then(Instant::now);
-                } else {
-                    tab.input_pending = true;
                 }
             }
             self.send(&bytes);
@@ -206,7 +203,6 @@ impl TerminalView {
             return;
         };
         tab.scroll = 0;
-        tab.input_pending = true;
         let text = text.replace("\r\n", "\r").replace('\n', "\r");
         let bytes = if tab.emu.term.bracketed_paste {
             // Strip a pasted end marker so it cannot close the paste early.

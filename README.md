@@ -51,6 +51,7 @@ cargo build --release
 | Broadcast typing to all panes | `Ctrl+Shift+B` |
 | Next / previous tab | `Ctrl+Tab` / `Ctrl+Shift+Tab` |
 | Copy selection | `Ctrl+Shift+C` |
+| Paste | `Ctrl+Shift+V` / `Shift+Insert` |
 | Find in scrollback | `Ctrl+Shift+F`, `Enter` / `Shift+Enter`, `Esc` |
 | Previous / next prompt | `Ctrl+Shift+PageUp` / `Ctrl+Shift+PageDown` |
 | Open a link | `Ctrl+click` (OSC 8 links and plain `http(s)://` URLs) |

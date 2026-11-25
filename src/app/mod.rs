@@ -74,9 +74,6 @@ pub(crate) struct Pane {
     pub(crate) scroll: usize,
     /// Accumulator for fractional touchpad deltas.
     pub(crate) scroll_acc: f32,
-    /// True while the user has typed input that has not been submitted yet.
-    /// Prevents the resize redraw from executing a pending command.
-    pub(crate) input_pending: bool,
     /// When the running command was submitted (Enter), until it finishes.
     pub(crate) busy_since: Option<Instant>,
     /// Last size applied to the PTY, used to detect column changes.
@@ -110,7 +107,6 @@ impl Pane {
             resize_seq: 0,
             scroll: 0,
             scroll_acc: 0.,
-            input_pending: false,
             busy_since: None,
             pty_size: (COLS as u16, ROWS as u16),
             origin: point(px(0.), px(0.)),
@@ -275,6 +271,8 @@ pub(crate) struct TerminalView {
     pub(crate) font: SharedString,
     pub(crate) fonts: Vec<String>,
     pub(crate) font_picker: Combobox,
+    /// Keeps the shortcut list in settings scrollable on small windows.
+    pub(crate) settings_scroll: ScrollHandle,
 }
 
 impl TerminalView {
@@ -345,6 +343,7 @@ impl TerminalView {
             font: font_family.into(),
             fonts,
             font_picker: Combobox::new("Search fonts…", cx),
+            settings_scroll: ScrollHandle::new(),
         }
     }
 
@@ -711,15 +710,6 @@ impl TerminalView {
             if tab.resize_seq == seq {
                 if let Some(pty) = &mut tab.pty {
                     let _ = pty.resize(size.0, size.1);
-                    // PowerShell 5.1 non ridisegna il prompt esistente quando
-                    // cambia la larghezza: la parte allineata a destra resta
-                    // alla vecchia colonna. Un Invio su riga vuota forza un
-                    // nuovo prompt alla larghezza corretta. Se l'utente ha
-                    // digitato qualcosa, non inviarlo per non eseguire il
-                    // comando a sua insaputa.
-                    if size.0 != tab.pty_size.0 && cfg!(windows) && !tab.input_pending {
-                        let _ = pty.write(b"\r");
-                    }
                     tab.pty_size = size;
                 }
             }

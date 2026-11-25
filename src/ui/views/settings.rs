@@ -1,4 +1,4 @@
-//! Settings panel: font family, tab position and default shell.
+//! Settings panel: font family, tab position, default shell and keyboard shortcuts.
 
 use crate::app::{TabPosition, TerminalView};
 use crate::terminal::DEFAULT_FG;
@@ -8,6 +8,70 @@ use gpui::*;
 
 /// Right column of the settings form: bounded, so controls stay compact.
 const CONTROL_WIDTH: Pixels = px(300.);
+
+/// Shortcuts handled by ftty, not by the shell. Keep in sync with
+/// `TerminalView::on_key` and the README shortcut table.
+const KEYBINDS: &[(&str, &str)] = &[
+    ("New tab", "Ctrl+Shift+T"),
+    ("Close pane (last pane: tab)", "Ctrl+Shift+W"),
+    ("Close tab", "Middle-click on tab"),
+    ("Split right / down", "Ctrl+Shift+D / Ctrl+Shift+E"),
+    ("Focus pane", "Ctrl+Shift+Arrow"),
+    ("Previous / next pane", "Ctrl+Shift+[ / ]"),
+    ("Zoom pane", "Ctrl+Shift+Z / Ctrl+Shift+Enter"),
+    ("Resize panes", "Ctrl+Alt+Shift+Arrow"),
+    ("Equalize panes", "Ctrl+Alt+Shift+="),
+    ("Swap panes", "Ctrl+Alt+Shift+[ / ]"),
+    ("Broadcast typing", "Ctrl+Shift+B"),
+    ("Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"),
+    ("Copy selection", "Ctrl+Shift+C"),
+    ("Paste", "Ctrl+Shift+V / Shift+Insert"),
+    ("Find in scrollback", "Ctrl+Shift+F"),
+    (
+        "Next / previous prompt",
+        "Ctrl+Shift+PageUp / Ctrl+Shift+PageDown",
+    ),
+    ("Scroll history", "Shift+PageUp / Shift+PageDown"),
+    ("Open link", "Ctrl+click"),
+    ("Open / close settings", "Gear button"),
+];
+
+/// One read-only shortcut: same surface and radius as the other controls,
+/// with the keys in a badge like the tab labels.
+fn keybind_row(index: usize, action: &'static str, keys: &'static str) -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap_3()
+        .min_h(px(28.))
+        .px(px(10.))
+        .bg(color_of(theme::CHROME))
+        .when(index > 0, |d| {
+            d.border_t_1().border_color(color_of(theme::BORDER))
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.))
+                .truncate()
+                .text_color(color_of(theme::MUTED))
+                .child(action),
+        )
+        .child(
+            div()
+                .flex_none()
+                .rounded(theme::CHIP_RADIUS)
+                .border_1()
+                .border_color(color_of(theme::BORDER))
+                .bg(color_of(theme::BADGE_BG))
+                .px(px(6.))
+                .py(px(2.))
+                .max_w(px(260.))
+                .truncate()
+                .text_color(color_of(DEFAULT_FG))
+                .child(keys),
+        )
+}
 
 /// One row: label and hint on the left, control in a compact column.
 /// Rows are separated by a hairline.
@@ -67,7 +131,7 @@ fn layout_icon(position: TabPosition) -> Div {
 }
 
 impl TerminalView {
-    /// Settings content: font family, tab position and default shell.
+    /// Settings content: font family, tab position, default shell and shortcuts.
     pub(crate) fn settings(&self, cx: &mut Context<Self>) -> Div {
         let mut view = div()
             .flex_1()
@@ -224,6 +288,56 @@ impl TerminalView {
             "New tabs use the selected shell.",
             shells,
         ));
+
+        let mut shortcuts = div()
+            .flex()
+            .flex_col()
+            .rounded(theme::CONTROL_RADIUS)
+            .border_1()
+            .border_color(color_of(theme::BORDER))
+            .overflow_hidden();
+        for (i, (action, keys)) in KEYBINDS.iter().enumerate() {
+            shortcuts = shortcuts.child(keybind_row(i, *action, *keys));
+        }
+        view = view
+            .child(
+                div()
+                    .pt(px(20.))
+                    .pb(px(8.))
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(2.))
+                            .h(px(12.))
+                            .rounded(px(1.))
+                            .bg(color_of(theme::ACCENT)),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(color_of(DEFAULT_FG))
+                            .child("Keyboard shortcuts"),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.))
+                            .truncate()
+                            .text_color(color_of(theme::MUTED))
+                            .child("Handled by ftty, not the shell."),
+                    ),
+            )
+            .child(
+                div()
+                    .id("settings-keybinds")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .track_scroll(&self.settings_scroll)
+                    .child(shortcuts),
+            );
 
         view
     }
