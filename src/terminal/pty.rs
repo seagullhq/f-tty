@@ -1,4 +1,4 @@
-use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
 use std::sync::mpsc::{Receiver, channel};
 use std::thread;
@@ -6,6 +6,9 @@ use std::thread;
 pub struct Pty {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
+    /// ConPTY keeps its output pipe open after the child exits, so EOF alone
+    /// cannot signal termination on Windows. Polling the child covers both OSes.
+    child: Box<dyn Child + Send + Sync>,
     pub rx: Receiver<Vec<u8>>,
 }
 
@@ -31,8 +34,8 @@ impl Pty {
         }
         super::integration::apply(&mut cmd, shell);
 
-        let _child = pair.slave.spawn_command(cmd)?;
-        // Su Windows ConPTY tenere lo slave aperto nel parent pu� impedire EOF.
+        let child = pair.slave.spawn_command(cmd)?;
+        // On Windows ConPTY, keeping the slave open in the parent may prevent EOF.
         drop(pair.slave);
 
         let mut reader = pair.master.try_clone_reader()?;
@@ -57,8 +60,14 @@ impl Pty {
         Ok(Self {
             writer,
             master: pair.master,
+            child,
             rx,
         })
+    }
+
+    /// The shell's exit status once it has terminated.
+    pub fn exit_status(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     pub fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
@@ -75,6 +84,36 @@ impl Pty {
             pixel_height: 0,
         })?;
         Ok(())
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[::core::prelude::v1::test]
+    fn reports_the_exit_of_cmd_exe() {
+        let mut pty = Pty::spawn(80, 24, "cmd.exe", None).unwrap();
+        assert!(pty.exit_status().is_none());
+        thread::sleep(Duration::from_millis(500)); // let cmd.exe show its prompt
+        pty.write(b"exit\r\n").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut out = Vec::new();
+        while Instant::now() < deadline && pty.exit_status().is_none() {
+            if let Ok(chunk) = pty.rx.recv_timeout(Duration::from_millis(20)) {
+                out.extend_from_slice(&chunk);
+                // ConPTY asks for the cursor position before showing the prompt.
+                if chunk.windows(4).any(|w| w == b"\x1b[6n") {
+                    pty.write(b"\x1b[1;1R").unwrap();
+                }
+            }
+        }
+        assert!(
+            pty.exit_status().is_some_and(|status| status.success()),
+            "cmd.exe exit was not detected; output: {:?}",
+            String::from_utf8_lossy(&out)
+        );
     }
 }
 

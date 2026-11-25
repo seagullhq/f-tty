@@ -479,12 +479,27 @@ impl TerminalView {
                         }
                     }
                 }
+                // ConPTY keeps its output pipe open after the shell exits, so
+                // EOF alone never arrives on Windows. Poll the child process.
+                if !gone {
+                    if let Some(pty) = &mut pane.pty {
+                        if pty.exit_status().is_some() {
+                            gone = true;
+                        }
+                    }
+                }
                 if gone {
+                    // Only a quick *failed* start stays on screen so its error
+                    // can be read. A clean `exit` closes even if typed at once.
+                    let quick_failure = pane
+                        .pty
+                        .as_mut()
+                        .and_then(|pty| pty.exit_status())
+                        .is_some_and(|status| !status.success())
+                        && pane.born.elapsed() < Duration::from_secs(2);
                     pane.pty = None;
                     received = true;
-                    // A shell that dies at once is left on screen so its
-                    // error can be read; any other exit closes the pane.
-                    if pane.born.elapsed() < Duration::from_secs(2) {
+                    if quick_failure {
                         pane.emu.feed(b"\r\n[process exited]\r\n");
                     } else {
                         pane.exited = true;

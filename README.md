@@ -20,7 +20,7 @@ A compact GPU terminal written in Rust with [GPUI](https://gpui.rs).
 
 ## Requirements
 
-- Recent stable Rust (edition 2024).
+- Rust 1.100.0 or newer (edition 2024). GPUI needs stable `DropGuard`; `rust-toolchain.toml` pins 1.100.0 and `rustup` installs it automatically.
 - **Linux**: Vulkan driver and development libraries for fontconfig, freetype, xkbcommon and Wayland/X11.
   - Debian/Ubuntu: `sudo apt install gcc g++ clang cmake pkg-config libfontconfig-dev libfreetype-dev libwayland-dev wayland-protocols libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libssl-dev libvulkan-dev libvulkan1`
   - Fedora: `sudo dnf install gcc-c++ clang cmake pkg-config fontconfig-devel freetype-devel wayland-devel libxkbcommon-devel libxkbcommon-x11-devel libX11-devel libxcb-devel vulkan-devel`
