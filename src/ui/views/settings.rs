@@ -1,5 +1,6 @@
 //! Settings panel: font family, tab position, default shell and keyboard shortcuts.
 
+use crate::app::scrollbar::SETTINGS_SCROLLBAR_WIDTH;
 use crate::app::{TabPosition, TerminalView};
 use crate::terminal::DEFAULT_FG;
 use crate::ui::theme::{self, color_of};
@@ -9,44 +10,28 @@ use gpui::*;
 /// Right column of the settings form: bounded, so controls stay compact.
 const CONTROL_WIDTH: Pixels = px(300.);
 
-/// Shortcuts handled by ftty, not by the shell. Keep in sync with
-/// `TerminalView::on_key` and the README shortcut table.
-const KEYBINDS: &[(&str, &str)] = &[
-    ("New tab", "Ctrl+Shift+T"),
-    ("Close pane (last pane: tab)", "Ctrl+Shift+W"),
+/// Mouse actions stay fixed: they are not keyboard chords.
+const MOUSE_BINDS: &[(&str, &str)] = &[
     ("Close tab", "Middle-click on tab"),
-    ("Split right / down", "Ctrl+Shift+D / Ctrl+Shift+E"),
-    ("Focus pane", "Ctrl+Shift+Arrow"),
-    ("Previous / next pane", "Ctrl+Shift+[ / ]"),
-    ("Zoom pane", "Ctrl+Shift+Z / Ctrl+Shift+Enter"),
-    ("Resize panes", "Ctrl+Alt+Shift+Arrow"),
-    ("Equalize panes", "Ctrl+Alt+Shift+="),
-    ("Swap panes", "Ctrl+Alt+Shift+[ / ]"),
-    ("Broadcast typing", "Ctrl+Shift+B"),
-    ("Next / previous tab", "Ctrl+Tab / Ctrl+Shift+Tab"),
-    ("Copy selection", "Ctrl+Shift+C"),
-    ("Paste", "Ctrl+Shift+V / Shift+Insert"),
-    ("Find in scrollback", "Ctrl+Shift+F"),
-    (
-        "Next / previous prompt",
-        "Ctrl+Shift+PageUp / Ctrl+Shift+PageDown",
-    ),
-    ("Scroll history", "Shift+PageUp / Shift+PageDown"),
     ("Open link", "Ctrl+click"),
     ("Open / close settings", "Gear button"),
 ];
 
-/// One read-only shortcut: same surface and radius as the other controls,
-/// with the keys in a badge like the tab labels.
-fn keybind_row(index: usize, action: &'static str, keys: &'static str) -> Div {
+/// One shortcut row: same surface and radius as the other controls, with the
+/// keys in a badge like the tab labels.
+fn keybind_row(index: usize, label: &'static str, badge: impl IntoElement, capturing: bool) -> Div {
     div()
         .flex()
         .items_center()
         .gap_3()
         .min_h(px(28.))
         .px(px(10.))
-        .bg(color_of(theme::CHROME))
-        .when(index > 0, |d| {
+        .bg(color_of(if capturing {
+            theme::ACTIVE
+        } else {
+            theme::CHROME
+        }))
+        .when(index > 0 && !capturing, |d| {
             d.border_t_1().border_color(color_of(theme::BORDER))
         })
         .child(
@@ -55,22 +40,9 @@ fn keybind_row(index: usize, action: &'static str, keys: &'static str) -> Div {
                 .min_w(px(0.))
                 .truncate()
                 .text_color(color_of(theme::MUTED))
-                .child(action),
+                .child(label),
         )
-        .child(
-            div()
-                .flex_none()
-                .rounded(theme::CHIP_RADIUS)
-                .border_1()
-                .border_color(color_of(theme::BORDER))
-                .bg(color_of(theme::BADGE_BG))
-                .px(px(6.))
-                .py(px(2.))
-                .max_w(px(260.))
-                .truncate()
-                .text_color(color_of(DEFAULT_FG))
-                .child(keys),
-        )
+        .child(badge)
 }
 
 /// One row: label and hint on the left, control in a compact column.
@@ -132,12 +104,15 @@ fn layout_icon(position: TabPosition) -> Div {
 
 impl TerminalView {
     /// Settings content: font family, tab position, default shell and shortcuts.
-    pub(crate) fn settings(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn settings(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        // Remember what this frame drew; the measuring canvas asks for another
+        // frame if the real viewport differs, so the thumb appears on open.
+        self.settings_metrics.set((
+            self.settings_scroll.bounds().size.height,
+            self.settings_scroll.max_offset().y,
+        ));
         let mut view = div()
-            .flex_1()
             .w_full()
-            .min_w(px(0.))
-            .min_h(px(0.))
             .px(px(32.))
             .py(px(24.))
             .flex()
@@ -296,14 +271,64 @@ impl TerminalView {
             .border_1()
             .border_color(color_of(theme::BORDER))
             .overflow_hidden();
-        for (i, (action, keys)) in KEYBINDS.iter().enumerate() {
-            shortcuts = shortcuts.child(keybind_row(i, *action, *keys));
+        for (i, binding) in self.keybinds.entries().iter().enumerate() {
+            let capturing = self.rebinding == Some(i);
+            let keys = if capturing {
+                "Press keys…".to_string()
+            } else {
+                binding.chord.to_string()
+            };
+            let badge = div()
+                .id(("keybind", i))
+                .flex_none()
+                .rounded(theme::CHIP_RADIUS)
+                .border_1()
+                .border_color(color_of(if capturing {
+                    theme::ACCENT
+                } else {
+                    theme::BORDER
+                }))
+                .bg(color_of(if capturing {
+                    theme::ACCENT
+                } else {
+                    theme::BADGE_BG
+                }))
+                .px(px(6.))
+                .py(px(2.))
+                .max_w(px(260.))
+                .truncate()
+                .text_color(color_of(if capturing {
+                    theme::BADGE_BG
+                } else {
+                    DEFAULT_FG
+                }))
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    this.start_rebind(i, window, cx);
+                }))
+                .child(keys);
+            shortcuts = shortcuts.child(keybind_row(i, binding.label, badge, capturing));
+        }
+        for (i, (label, keys)) in MOUSE_BINDS.iter().enumerate() {
+            let index = self.keybinds.entries().len() + i;
+            let badge = div()
+                .flex_none()
+                .rounded(theme::CHIP_RADIUS)
+                .border_1()
+                .border_color(color_of(theme::BORDER))
+                .bg(color_of(theme::BADGE_BG))
+                .px(px(6.))
+                .py(px(2.))
+                .text_color(color_of(theme::MUTED))
+                .child(*keys);
+            shortcuts = shortcuts.child(keybind_row(index, *label, badge, false));
         }
         view = view
             .child(
                 div()
                     .pt(px(20.))
-                    .pb(px(8.))
+                    .pb(px(2.))
                     .flex()
                     .items_center()
                     .gap_2()
@@ -320,25 +345,84 @@ impl TerminalView {
                             .text_color(color_of(DEFAULT_FG))
                             .child("Keyboard shortcuts"),
                     )
+                    .child(div().flex_1())
                     .child(
                         div()
-                            .flex_1()
-                            .min_w(px(0.))
-                            .truncate()
+                            .id("keybinds-reset")
+                            .text_xs()
                             .text_color(color_of(theme::MUTED))
-                            .child("Handled by ftty, not the shell."),
+                            .cursor_pointer()
+                            .hover(|s| s.text_color(color_of(DEFAULT_FG)))
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.reset_keybinds(cx);
+                            }))
+                            .child("Reset defaults"),
                     ),
             )
             .child(
                 div()
-                    .id("settings-keybinds")
-                    .flex_1()
-                    .min_h(px(0.))
+                    .pb(px(8.))
+                    .text_color(color_of(theme::MUTED))
+                    .child("Click a key to rebind, Esc cancels. Mouse actions are fixed."),
+            )
+            .child(shortcuts);
+
+        let mut root = div()
+            .id("settings-root")
+            .relative()
+            .flex_1()
+            .w_full()
+            .min_w(px(0.))
+            .min_h(px(0.))
+            .on_mouse_move(cx.listener(TerminalView::on_settings_scrollbar_move))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(TerminalView::on_settings_scrollbar_up),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(TerminalView::on_settings_scrollbar_up),
+            )
+            .child(
+                div()
+                    .id("settings-scroll")
+                    .absolute()
+                    .top(px(0.))
+                    .left(px(0.))
+                    .size_full()
                     .overflow_y_scroll()
+                    .scrollbar_width(SETTINGS_SCROLLBAR_WIDTH)
                     .track_scroll(&self.settings_scroll)
-                    .child(shortcuts),
+                    .child(view),
             );
 
-        view
+        // The scroll handle only knows its bounds after prepaint. Compare them
+        // with what we drew and redraw once when the viewport or content changes.
+        let metrics = self.settings_metrics.clone();
+        let scroll = self.settings_scroll.clone();
+        root = root.child(
+            canvas(
+                move |bounds, window, _| {
+                    let drawn = metrics.get();
+                    if drawn.0 != bounds.size.height || drawn.1 != scroll.max_offset().y {
+                        window.refresh();
+                    }
+                },
+                |_, _, _, _| {},
+            )
+            .absolute()
+            .top(px(0.))
+            .left(px(0.))
+            .size_full(),
+        );
+
+        if let Some(bar) = self.settings_scrollbar() {
+            root = root.child(bar.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(TerminalView::on_settings_scrollbar_down),
+            ));
+        }
+
+        root
     }
 }

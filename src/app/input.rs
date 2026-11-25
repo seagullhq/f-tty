@@ -1,5 +1,6 @@
 //! Keyboard and mouse event handling.
 
+use super::keybinds::{Action, Chord};
 use crate::app::tree::Dir;
 use crate::app::{Selection, TerminalView};
 use gpui::*;
@@ -14,53 +15,29 @@ impl TerminalView {
     ) {
         let ks = &ev.keystroke;
 
-        // Tab shortcuts (not sent to the shell).
-        if ks.modifiers.control {
-            if ks.modifiers.shift && ks.modifiers.alt {
-                // Pane layout: resize, equalize, swap.
-                if let Some(dir) = Dir::parse(&ks.key) {
-                    return self.resize_pane_key(dir, cx);
+        // A settings row is waiting for the chord the user just pressed.
+        if let Some(index) = self.rebinding {
+            self.capture_rebind(index, ks, cx);
+            return;
+        }
+
+        if let Some(action) = self.keybinds.match_action(ks) {
+            if self.settings_open {
+                if action == Action::ClosePane {
+                    self.font_picker.close();
+                    self.settings_open = false;
+                    self.rebinding = None;
+                    cx.notify();
+                    return;
                 }
-                match ks.key.as_str() {
-                    "=" | "+" => return self.equalize_panes(cx),
-                    "[" | "{" => return self.swap_pane(-1, cx),
-                    "]" | "}" => return self.swap_pane(1, cx),
-                    _ => {}
+                // Other app shortcuts do nothing while settings are open; with
+                // the font picker open the key still belongs to its input.
+                if !self.font_picker.is_open() {
+                    return;
                 }
-            } else if ks.modifiers.shift {
-                if let Some(dir) = Dir::parse(&ks.key) {
-                    return self.focus_direction(dir, cx);
-                }
-                match ks.key.as_str() {
-                    "c" => {
-                        self.copy_selection(cx);
-                        return;
-                    }
-                    "f" => return self.open_search(cx),
-                    "v" => return self.paste(cx),
-                    "t" => return self.open_tab(cx),
-                    "w" => {
-                        if self.settings_open {
-                            self.settings_open = false;
-                            cx.notify();
-                        } else {
-                            self.close_pane(window, cx);
-                        }
-                        return;
-                    }
-                    "d" => return self.split_pane(Axis::Horizontal, cx),
-                    "e" => return self.split_pane(Axis::Vertical, cx),
-                    "[" | "{" => return self.cycle_pane(-1, cx),
-                    "]" | "}" => return self.cycle_pane(1, cx),
-                    "z" | "enter" => return self.toggle_zoom(cx),
-                    "b" => return self.toggle_broadcast(cx),
-                    "tab" => return self.cycle_tab(-1, cx),
-                    "pageup" => return self.jump_prompt(true, cx),
-                    "pagedown" => return self.jump_prompt(false, cx),
-                    _ => {}
-                }
-            } else if ks.key == "tab" {
-                return self.cycle_tab(1, cx);
+            } else {
+                self.dispatch(action, ks, window, cx);
+                return;
             }
         }
 
@@ -79,15 +56,6 @@ impl TerminalView {
                 cx.notify();
             }
             return;
-        }
-
-        if ks.modifiers.shift && matches!(ks.key.as_str(), "pageup" | "pagedown") {
-            self.scroll_page(ks.key == "pageup", cx);
-            return;
-        }
-
-        if ks.modifiers.shift && ks.key == "insert" {
-            return self.paste(cx);
         }
 
         if let Some(mut bytes) = Self::keystroke_bytes(ks) {
@@ -114,6 +82,67 @@ impl TerminalView {
                 }
             }
             self.send(&bytes);
+        }
+    }
+
+    /// Assigns the pressed chord to the armed settings row. Esc cancels, and
+    /// an unmodified key is ignored so plain typing keeps reaching the shell.
+    fn capture_rebind(&mut self, index: usize, ks: &Keystroke, cx: &mut Context<Self>) {
+        if ks.key == "escape" && !ks.modifiers.modified() {
+            self.rebinding = None;
+            cx.notify();
+            return;
+        }
+        let Some(chord) = Chord::from_keystroke(ks) else {
+            return;
+        };
+        if self.keybinds.rebind(index, chord) {
+            self.save_settings();
+        }
+        self.rebinding = None;
+        cx.notify();
+    }
+
+    /// Runs the action behind a matched chord. Arrow groups recover the
+    /// direction from the actual key that was pressed.
+    fn dispatch(
+        &mut self,
+        action: Action,
+        ks: &Keystroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            Action::NewTab => self.open_tab(cx),
+            Action::ClosePane => self.close_pane(window, cx),
+            Action::SplitRight => self.split_pane(Axis::Horizontal, cx),
+            Action::SplitDown => self.split_pane(Axis::Vertical, cx),
+            Action::FocusPane => {
+                if let Some(dir) = Dir::parse(&ks.key) {
+                    self.focus_direction(dir, cx);
+                }
+            }
+            Action::PrevPane => self.cycle_pane(-1, cx),
+            Action::NextPane => self.cycle_pane(1, cx),
+            Action::Zoom => self.toggle_zoom(cx),
+            Action::ResizePane => {
+                if let Some(dir) = Dir::parse(&ks.key) {
+                    self.resize_pane_key(dir, cx);
+                }
+            }
+            Action::Equalize => self.equalize_panes(cx),
+            Action::SwapPrev => self.swap_pane(-1, cx),
+            Action::SwapNext => self.swap_pane(1, cx),
+            Action::Broadcast => self.toggle_broadcast(cx),
+            Action::NextTab => self.cycle_tab(1, cx),
+            Action::PrevTab => self.cycle_tab(-1, cx),
+            Action::Copy => self.copy_selection(cx),
+            Action::Paste => self.paste(cx),
+            Action::Find => self.open_search(cx),
+            Action::NextPrompt => self.jump_prompt(true, cx),
+            Action::PrevPrompt => self.jump_prompt(false, cx),
+            Action::ScrollUp => self.scroll_page(true, cx),
+            Action::ScrollDown => self.scroll_page(false, cx),
         }
     }
 

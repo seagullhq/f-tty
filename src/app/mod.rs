@@ -1,12 +1,13 @@
 //! Application state and behavior: tabs, input, selection, layout, settings and startup tuning.
 
 mod input;
+pub(crate) mod keybinds;
 mod layout;
 mod links;
 mod notify;
 mod panes;
 mod prompts;
-mod scrollbar;
+pub(crate) mod scrollbar;
 mod search;
 mod selection;
 mod settings;
@@ -21,7 +22,10 @@ use crate::ui::components::Combobox;
 use crate::ui::theme;
 use crate::{COLS, ROWS};
 use gpui::*;
+use keybinds::KeyBinds;
+use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
+use std::rc::Rc;
 use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 use tree::Tree;
@@ -271,8 +275,16 @@ pub(crate) struct TerminalView {
     pub(crate) font: SharedString,
     pub(crate) fonts: Vec<String>,
     pub(crate) font_picker: Combobox,
-    /// Keeps the shortcut list in settings scrollable on small windows.
+    pub(crate) keybinds: KeyBinds,
+    /// Index of the shortcut row waiting for a new chord.
+    pub(crate) rebinding: Option<usize>,
+    /// Keeps the settings panel reachable on small windows.
     pub(crate) settings_scroll: ScrollHandle,
+    /// Metrics used for the last drawn settings scrollbar; a `canvas` compares
+    /// them with the real bounds so the thumb appears after the first layout.
+    pub(crate) settings_metrics: Rc<Cell<(Pixels, Pixels)>>,
+    /// The settings scrollbar thumb is being dragged.
+    pub(crate) settings_scroll_drag: bool,
 }
 
 impl TerminalView {
@@ -343,7 +355,11 @@ impl TerminalView {
             font: font_family.into(),
             fonts,
             font_picker: Combobox::new("Search fonts…", cx),
+            keybinds: saved.keybinds,
+            rebinding: None,
             settings_scroll: ScrollHandle::new(),
+            settings_metrics: Rc::new(Cell::new((px(0.), px(0.)))),
+            settings_scroll_drag: false,
         }
     }
 
@@ -372,6 +388,7 @@ impl TerminalView {
             shell: self.shell.program.clone(),
             font: self.font.to_string(),
             strip: self.strip_width.into(),
+            keybinds: self.keybinds.clone(),
         });
     }
 
@@ -608,6 +625,28 @@ impl TerminalView {
         self.settings_open = !self.settings_open;
         self.selection = None;
         self.selecting = false;
+        self.rebinding = None;
+        self.settings_scroll_drag = false;
+        cx.notify();
+    }
+
+    /// Arms the settings row `index` to capture the next chord.
+    pub(crate) fn start_rebind(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.font_picker.close();
+        window.focus(&self.focus, cx);
+        self.rebinding = Some(index);
+        cx.notify();
+    }
+
+    pub(crate) fn reset_keybinds(&mut self, cx: &mut Context<Self>) {
+        self.keybinds.reset();
+        self.rebinding = None;
+        self.save_settings();
         cx.notify();
     }
 

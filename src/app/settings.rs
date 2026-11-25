@@ -1,5 +1,6 @@
 //! Persistence of user preferences across launches.
 
+use super::keybinds::{Chord, KeyBinds};
 use crate::app::TabPosition;
 use std::fs;
 use std::path::PathBuf;
@@ -12,6 +13,7 @@ pub(crate) struct SavedSettings {
     pub font: String,
     /// Side tab list width in pixels.
     pub strip: f32,
+    pub keybinds: KeyBinds,
 }
 
 impl Default for SavedSettings {
@@ -21,6 +23,7 @@ impl Default for SavedSettings {
             shell: String::new(),
             font: crate::FONT.to_string(),
             strip: crate::ui::theme::STRIP_WIDTH.into(),
+            keybinds: KeyBinds::default(),
         }
     }
 }
@@ -67,13 +70,21 @@ pub(crate) fn save(settings: &SavedSettings) {
 }
 
 fn encode(settings: &SavedSettings) -> String {
-    format!(
+    let mut out = format!(
         "position={}\nshell={}\nfont={}\nstrip={}\n",
         settings.tabs_position.label(),
         one_line(&settings.shell),
         one_line(&settings.font),
         settings.strip,
-    )
+    );
+    for binding in settings.keybinds.entries() {
+        out.push_str(&format!(
+            "bind={}:{}\n",
+            binding.action.name(),
+            binding.chord
+        ));
+    }
+    out
 }
 
 fn decode(contents: &str) -> SavedSettings {
@@ -96,6 +107,13 @@ fn decode(contents: &str) -> SavedSettings {
                     settings.strip = width;
                 }
             }
+            "bind" => {
+                if let Some((name, chord)) = value.split_once(':')
+                    && let Some(chord) = Chord::parse(chord)
+                {
+                    settings.keybinds.set_named(name, chord);
+                }
+            }
             _ => {}
         }
     }
@@ -113,20 +131,27 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn settings_round_trip() {
-        let saved = SavedSettings {
+        let mut saved = SavedSettings {
             tabs_position: TabPosition::Left,
             shell: "C:\\Program Files\\PowerShell\\7\\pwsh.exe".into(),
             font: "Cascadia Mono".into(),
             strip: 96.,
+            keybinds: KeyBinds::default(),
         };
+        saved
+            .keybinds
+            .set_named("new_tab", Chord::parse("ctrl+y").unwrap());
         assert_eq!(decode(&encode(&saved)), saved);
     }
 
     #[::core::prelude::v1::test]
     fn decode_ignores_unknown_and_invalid_values() {
-        let decoded = decode("position=Nowhere\nshell=/bin/zsh\nfont=\nunknown=x\n");
+        let decoded = decode(
+            "position=Nowhere\nshell=/bin/zsh\nfont=\nunknown=x\nbind=nope:ctrl+a\nbind=new_tab:bad++\n",
+        );
         assert_eq!(decoded.tabs_position, TabPosition::Top);
         assert_eq!(decoded.shell, "/bin/zsh");
         assert_eq!(decoded.font, SavedSettings::default().font);
+        assert_eq!(decoded.keybinds, KeyBinds::default());
     }
 }

@@ -9,8 +9,9 @@ A compact GPU terminal written in Rust with [GPUI](https://gpui.rs).
 - Multiple tabs, each with its own PTY and VTE emulator.
 - Tab labels follow the shell title (OSC 0/2) or the current directory (OSC 7), falling back to `Terminal N`.
 - Tab list position: **top, bottom, left or right**.
-- Settings inside the terminal area, without taking up a tab.
-- Searchable installed-font combobox in settings; tab position, shell and font are restored on the next launch.
+- Settings inside the terminal area, without taking up a tab; the whole panel scrolls with a visible scrollbar when the window is short.
+- Editable keyboard shortcuts in settings, saved per user; reset to defaults with one click.
+- Searchable installed-font combobox in settings; tab position, shell, font and keybinds are restored on the next launch.
 - Mouse text selection and copy with `Ctrl+Shift+C`.
 - 2,000-line scrollback per tab: mouse wheel and `Shift+PageUp` / `Shift+PageDown`.
 - Grid and PTY resized to the actual window space (SIGWINCH); existing text rewraps to the new width without changing the font size.
@@ -35,6 +36,10 @@ cargo build --release
 ```
 
 ## Shortcuts
+
+Defaults are listed below; click a key in Settings to rebind it. Assigning a
+used chord swaps the two actions. Esc cancels a capture; unmodified keys are
+not bindable. Mouse actions are fixed.
 
 | Action | Key |
 | --- | --- |
