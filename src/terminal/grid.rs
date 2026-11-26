@@ -15,8 +15,11 @@ struct Screen {
 pub struct Term {
     pub cols: usize,
     pub rows: usize,
-    /// Screen as a flat buffer: row r, column c -> cells[r * cols + c]
-    pub cells: Vec<Cell>,
+    /// Screen as a flat buffer of physical rows. Logical row `r` is physical
+    /// row `(head + r) % rows`, so scrolling moves `head` instead of copying
+    /// the whole screen. Read rows with `row`, never by index.
+    cells: Vec<Cell>,
+    head: usize,
     /// (row, column)
     pub cursor: (usize, usize),
     pub cursor_visible: bool,
@@ -71,6 +74,7 @@ impl Term {
             cols,
             rows,
             cells: vec![Cell::default(); cols * rows],
+            head: 0,
             cursor: (0, 0),
             cursor_visible: true,
             scrollback: VecDeque::new(),
@@ -119,8 +123,32 @@ impl Term {
         };
     }
 
+    /// Physical index of the first cell of logical row `r`.
+    fn row_start(&self, r: usize) -> usize {
+        let mut p = self.head + r;
+        if p >= self.rows {
+            p -= self.rows;
+        }
+        p * self.cols
+    }
+
+    /// Physical index of logical flat index `i` (`row * cols + col`).
+    fn flat(&self, i: usize) -> usize {
+        self.row_start(i / self.cols) + i % self.cols
+    }
+
+    /// Makes logical and physical rows agree again (head = 0). Needed before
+    /// code that rebuilds the buffer.
+    fn normalize(&mut self) {
+        if self.head != 0 {
+            self.cells.rotate_left(self.head * self.cols);
+            self.head = 0;
+        }
+    }
+
     pub fn row(&self, r: usize) -> &[Cell] {
-        &self.cells[r * self.cols..(r + 1) * self.cols]
+        let start = self.row_start(r);
+        &self.cells[start..start + self.cols]
     }
 
     pub fn history_len(&self) -> usize {
@@ -205,6 +233,7 @@ impl Term {
         if self.alt.is_some() {
             return;
         }
+        self.normalize();
         let blank = vec![Cell::default(); self.cols * self.rows];
         self.alt = Some(Screen {
             cells: std::mem::replace(&mut self.cells, blank),
@@ -219,6 +248,7 @@ impl Term {
     pub(super) fn leave_alt(&mut self) {
         if let Some(main) = self.alt.take() {
             self.cells = main.cells;
+            self.head = 0;
             self.wrapped = main.wrapped;
             self.cursor = main.cursor;
             self.saved_cursor = main.saved_cursor;
@@ -334,6 +364,7 @@ impl Term {
         let saved_phys = new_logical_start[saved.0] + saved.1 / cols;
         let wrap_pending = self.wrap_pending;
         self.cells = cells;
+        self.head = 0;
         self.wrapped = new_wrapped[split..].iter().take(rows).copied().collect();
         self.wrapped.resize(rows, false);
         self.cols = cols;
@@ -359,6 +390,7 @@ impl Term {
         let mut wrapped = vec![false; rows];
         wrapped[..rows.min(self.rows)].copy_from_slice(&self.wrapped[..rows.min(self.rows)]);
         self.cells = cells;
+        self.head = 0;
         self.wrapped = wrapped;
         self.rows = rows;
         self.cursor.0 = self.cursor.0.min(rows - 1);
@@ -396,28 +428,53 @@ impl Term {
     /// Scrolls rows `top..=bottom` up. Lines leaving the top of the main
     /// screen go to the scrollback; region and alternate-screen scrolls don't.
     pub(super) fn scroll_region_up(&mut self, top: usize, bottom: usize, n: usize) {
-        let cols = self.cols;
         for _ in 0..n.min(bottom + 1 - top) {
             if top == 0 && self.alt.is_none() {
-                let line = trimmed(&self.cells[..cols]);
+                let line = trimmed(self.row(0));
                 let wrapped = self.wrapped[0];
                 self.push_history(line, wrapped);
             }
-            self.cells
-                .copy_within((top + 1) * cols..(bottom + 1) * cols, top * cols);
-            self.wrapped.copy_within(top + 1..=bottom, top);
-            self.cells[bottom * cols..(bottom + 1) * cols].fill(Cell::default());
+            self.shift_up(top, bottom, 1);
+        }
+    }
+
+    /// Moves rows `top..=bottom` up by `n`, blanking the freed bottom rows.
+    /// Whole-screen moves only change `head`: no cell is copied.
+    fn shift_up(&mut self, top: usize, bottom: usize, n: usize) {
+        let cols = self.cols;
+        for _ in 0..n.min(bottom + 1 - top) {
+            if top == 0 && bottom + 1 == self.rows {
+                self.head = (self.head + 1) % self.rows;
+                self.wrapped.rotate_left(1);
+            } else {
+                for r in top..bottom {
+                    let (src, dst) = (self.row_start(r + 1), self.row_start(r));
+                    self.cells.copy_within(src..src + cols, dst);
+                }
+                self.wrapped.copy_within(top + 1..=bottom, top);
+            }
+            let last = self.row_start(bottom);
+            self.cells[last..last + cols].fill(Cell::default());
             self.wrapped[bottom] = false;
         }
     }
 
+    /// Moves rows `top..=bottom` down by `n`, blanking the freed top rows.
     pub(super) fn scroll_region_down(&mut self, top: usize, bottom: usize, n: usize) {
         let cols = self.cols;
         for _ in 0..n.min(bottom + 1 - top) {
-            self.cells
-                .copy_within(top * cols..bottom * cols, (top + 1) * cols);
-            self.wrapped.copy_within(top..bottom, top + 1);
-            self.cells[top * cols..(top + 1) * cols].fill(Cell::default());
+            if top == 0 && bottom + 1 == self.rows {
+                self.head = (self.head + self.rows - 1) % self.rows;
+                self.wrapped.rotate_right(1);
+            } else {
+                for r in (top..bottom).rev() {
+                    let (src, dst) = (self.row_start(r), self.row_start(r + 1));
+                    self.cells.copy_within(src..src + cols, dst);
+                }
+                self.wrapped.copy_within(top..bottom, top + 1);
+            }
+            let first = self.row_start(top);
+            self.cells[first..first + cols].fill(Cell::default());
             self.wrapped[top] = false;
         }
     }
@@ -467,15 +524,8 @@ impl Term {
     pub(super) fn delete_lines(&mut self, n: usize) {
         if (self.top..=self.bottom).contains(&self.cursor.0) {
             // Deleted lines are discarded, not sent to the scrollback.
-            let cols = self.cols;
             let (r, bottom) = (self.cursor.0, self.bottom);
-            for _ in 0..n.min(bottom + 1 - r) {
-                self.cells
-                    .copy_within((r + 1) * cols..(bottom + 1) * cols, r * cols);
-                self.wrapped.copy_within(r + 1..=bottom, r);
-                self.cells[bottom * cols..(bottom + 1) * cols].fill(Cell::default());
-                self.wrapped[bottom] = false;
-            }
+            self.shift_up(r, bottom, n);
             self.cursor.1 = 0;
             self.wrap_pending = false;
         }
@@ -484,7 +534,8 @@ impl Term {
     /// ICH: shifts the rest of the row right, opening `n` blanks at the cursor.
     pub(super) fn insert_chars(&mut self, n: usize) {
         let (r, c) = self.cursor;
-        let row = &mut self.cells[r * self.cols..(r + 1) * self.cols];
+        let start = self.row_start(r);
+        let row = &mut self.cells[start..start + self.cols];
         let n = n.min(self.cols - c);
         row.copy_within(c..self.cols - n, c + n);
         row[c..c + n].fill(Cell::default());
@@ -494,7 +545,8 @@ impl Term {
     /// DCH: removes `n` cells at the cursor, pulling the rest of the row left.
     pub(super) fn delete_chars(&mut self, n: usize) {
         let (r, c) = self.cursor;
-        let row = &mut self.cells[r * self.cols..(r + 1) * self.cols];
+        let start = self.row_start(r);
+        let row = &mut self.cells[start..start + self.cols];
         let n = n.min(self.cols - c);
         row.copy_within(c + n.., c);
         row[self.cols - n..].fill(Cell::default());
@@ -514,7 +566,8 @@ impl Term {
             self.linefeed(true);
         }
         let (r, c) = self.cursor;
-        self.cells[r * self.cols + c] = Cell {
+        let at = self.row_start(r) + c;
+        self.cells[at] = Cell {
             ch,
             style: self.style,
             link: self.link,
@@ -527,8 +580,12 @@ impl Term {
         }
     }
 
+    /// Blanks logical flat indices `start..end` (row-major).
     pub(super) fn clear(&mut self, start: usize, end: usize) {
-        self.cells[start..end].fill(Cell::default());
+        for i in start..end {
+            let at = self.flat(i);
+            self.cells[at] = Cell::default();
+        }
     }
 
     pub(super) fn sgr(&mut self, params: &Params) {

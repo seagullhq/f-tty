@@ -1,7 +1,10 @@
 use portable_pty::{Child, CommandBuilder, ExitStatus, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
-use std::sync::mpsc::{Receiver, channel};
+use std::sync::mpsc::{Receiver, sync_channel};
 use std::thread;
+
+/// Chunks (64 KiB each) the reader may run ahead of the UI: about 4 MiB.
+const PTY_CHUNKS: usize = 64;
 
 pub struct Pty {
     writer: Box<dyn Write + Send>,
@@ -41,7 +44,9 @@ impl Pty {
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
-        let (tx, rx) = channel();
+        // Bounded: when the UI falls behind, the reader blocks and the child
+        // is slowed by the pty instead of buffering unbounded output.
+        let (tx, rx) = sync_channel(PTY_CHUNKS);
         thread::spawn(move || {
             // Large buffer: fewer syscalls and channel messages.
             let mut buf = vec![0u8; 64 * 1024];

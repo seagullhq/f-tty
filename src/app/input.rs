@@ -41,8 +41,16 @@ impl TerminalView {
             }
         }
 
+        // While the search bar is open its field has focus and takes the
+        // typing; only the bar's own navigation keys are handled here, and
+        // nothing reaches the shell.
         if self.search.is_some() && !self.settings_open {
-            return self.search_key(ks, cx);
+            match ks.key.as_str() {
+                "escape" => self.close_search(window, cx),
+                "enter" => self.search_step(!ks.modifiers.shift, cx),
+                _ => {}
+            }
+            return;
         }
 
         if self.settings_open {
@@ -138,7 +146,7 @@ impl TerminalView {
             Action::PrevTab => self.cycle_tab(-1, cx),
             Action::Copy => self.copy_selection(cx),
             Action::Paste => self.paste(cx),
-            Action::Find => self.open_search(cx),
+            Action::Find => self.open_search(window, cx),
             Action::NextPrompt => self.jump_prompt(true, cx),
             Action::PrevPrompt => self.jump_prompt(false, cx),
             Action::ScrollUp => self.scroll_page(true, cx),
@@ -208,6 +216,7 @@ impl TerminalView {
 
     /// Writes to the focused pane, or to every pane while broadcasting.
     fn send(&mut self, bytes: &[u8]) {
+        self.last_input = Some(Instant::now());
         let Some(tab) = self.tabs.get_mut(self.active) else {
             return;
         };

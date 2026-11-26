@@ -127,9 +127,9 @@ impl Render for TerminalView {
         self.layout_panes(window, cx);
 
         let card = if self.settings_open {
-            content_card(self.settings(cx))
+            content_card(self.settings(cx), true)
         } else {
-            content_card(terminal::terminal_screen(self, cx))
+            content_card(terminal::terminal_screen(self, cx), false)
         };
 
         let body = match self.tabs_position {

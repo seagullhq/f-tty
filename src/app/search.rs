@@ -3,11 +3,17 @@
 
 use crate::app::TerminalView;
 use crate::terminal::{Cell, Term};
+use crate::ui::components::{TextInput, icon};
 use crate::ui::theme::{self, color_of};
 use gpui::*;
 
 pub(crate) struct Search {
+    /// The text field the user types into.
+    pub(crate) input: Entity<TextInput>,
+    /// Copy of the field's text, the one matches are computed from.
     pub(crate) query: String,
+    /// Keeps the field observed while the bar is open.
+    _watch: Subscription,
     /// Index of the current match among all matches, and its position
     /// (buffer line, column).
     pub(crate) index: usize,
@@ -50,42 +56,45 @@ fn all_hits(term: &Term, query: &str) -> Vec<(usize, usize)> {
 }
 
 impl TerminalView {
-    pub(crate) fn open_search(&mut self, cx: &mut Context<Self>) {
-        if self.search.is_none() && !self.settings_open {
-            self.search = Some(Search {
-                query: String::new(),
-                index: 0,
-                pos: None,
-                total: 0,
-            });
-            cx.notify();
+    pub(crate) fn open_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.is_some() || self.settings_open {
+            return;
         }
+        let input = cx.new(|cx| TextInput::new("Find in scrollback", cx));
+        let handle = input.read(cx).focus_handle();
+        let watch = cx.observe(&input, |this, input, cx| {
+            let text = input.read(cx).text().to_string();
+            this.search_sync(text, cx);
+        });
+        self.search = Some(Search {
+            input,
+            query: String::new(),
+            _watch: watch,
+            index: 0,
+            pos: None,
+            total: 0,
+        });
+        window.focus(&handle, cx);
+        cx.notify();
     }
 
-    pub(crate) fn close_search(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.search.take().is_some() {
+            window.focus(&self.focus, cx);
             cx.notify();
         }
     }
 
-    /// Handles a key while the bar is open; the shell never sees it.
-    pub(crate) fn search_key(&mut self, ks: &Keystroke, cx: &mut Context<Self>) {
+    /// The field's text changed: recount when the query really differs (the
+    /// field also notifies on caret moves, which must not jump the view).
+    fn search_sync(&mut self, text: String, cx: &mut Context<Self>) {
         let Some(search) = &mut self.search else {
             return;
         };
-        match ks.key.as_str() {
-            "escape" => return self.close_search(cx),
-            "enter" => return self.search_step(!ks.modifiers.shift, cx),
-            "backspace" => {
-                search.query.pop();
-            }
-            _ => match Self::typed_text(ks) {
-                Some(text) if !ks.modifiers.control && !ks.modifiers.platform => {
-                    search.query.push_str(&text)
-                }
-                _ => return,
-            },
+        if search.query == text {
+            return;
         }
+        search.query = text;
         self.search_update(cx);
     }
 
@@ -101,7 +110,7 @@ impl TerminalView {
         self.search_reveal(cx);
     }
 
-    fn search_step(&mut self, forward: bool, cx: &mut Context<Self>) {
+    pub(crate) fn search_step(&mut self, forward: bool, cx: &mut Context<Self>) {
         let Some(hits) = self.search_hits() else {
             return;
         };
@@ -169,40 +178,105 @@ impl TerminalView {
         rects
     }
 
-    /// The bar, pinned to the top right of the terminal card.
-    pub(crate) fn search_bar(&self) -> Option<Div> {
+    /// The bar, over the top right of the focused pane: field, count,
+    /// previous / next / close.
+    pub(crate) fn search_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         let search = self.search.as_ref()?;
         let status = if search.query.is_empty() {
             String::new()
         } else if search.total == 0 {
             "No results".to_string()
         } else {
-            format!("{}/{}", search.index + 1, search.total)
+            format!("{} of {}", search.index + 1, search.total)
         };
+        let bar = div()
+            .id("search-bar")
+            .flex()
+            .items_center()
+            .gap_1()
+            .h(px(30.))
+            .pl(px(8.))
+            .pr(px(4.))
+            .rounded(theme::CONTROL_RADIUS)
+            .bg(color_of(theme::CHROME))
+            .border_1()
+            .border_color(color_of(theme::BORDER))
+            // Clicks on the bar belong to the bar, not to the pane below.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(icon("icons/magnifying-glass.svg", 12., theme::MUTED))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.))
+                    .text_sm()
+                    .child(search.input.clone()),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .px_1()
+                    .text_xs()
+                    .text_color(color_of(theme::MUTED))
+                    .child(status),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .w(px(1.))
+                    .h(px(14.))
+                    .bg(color_of(theme::BORDER)),
+            )
+            .child(bar_button(
+                "search-prev",
+                "icons/chevron-up.svg",
+                cx,
+                |v, _, cx| v.search_step(false, cx),
+            ))
+            .child(bar_button(
+                "search-next",
+                "icons/chevron-down.svg",
+                cx,
+                |v, _, cx| v.search_step(true, cx),
+            ))
+            .child(bar_button(
+                "search-close",
+                "icons/x-mark.svg",
+                cx,
+                |v, window, cx| v.close_search(window, cx),
+            ));
         Some(
             div()
                 .absolute()
                 .top(px(8.))
+                .left(px(8.))
                 .right(px(16.))
                 .flex()
-                .items_center()
-                .gap_3()
-                .h(px(30.))
-                .px(px(10.))
-                .rounded(theme::CONTROL_RADIUS)
-                .bg(color_of(theme::ACTIVE))
-                .border_1()
-                .border_color(color_of(theme::BORDER))
-                .text_xs()
-                .child(
-                    div()
-                        .min_w(px(140.))
-                        .text_color(color_of(crate::terminal::DEFAULT_FG))
-                        .child(format!("{}▏", search.query)),
-                )
-                .child(div().text_color(color_of(theme::MUTED)).child(status)),
+                .justify_end()
+                .child(div().flex_shrink(1.).w(px(360.)).min_w(px(0.)).child(bar)),
         )
     }
+}
+
+/// Icon button of the search bar. Its click is handled by `act` on the view.
+fn bar_button(
+    id: &'static str,
+    path: &'static str,
+    cx: &mut Context<TerminalView>,
+    act: fn(&mut TerminalView, &mut Window, &mut Context<TerminalView>),
+) -> Stateful<Div> {
+    div()
+        .id(id)
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .size(px(22.))
+        .rounded(theme::CHIP_RADIUS)
+        .cursor_pointer()
+        .hover(|s| s.bg(color_of(theme::HOVER)))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| act(this, window, cx)))
+        .child(icon(path, 12., theme::MUTED))
 }
 
 #[cfg(test)]

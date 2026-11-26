@@ -32,8 +32,14 @@ pub const TAB_WIDTH: Pixels = px(132.);
 pub const TAB_MIN_WIDTH: Pixels = px(80.);
 pub const TAB_HEIGHT: Pixels = px(26.);
 pub const TAB_PADDING: Pixels = px(8.);
-/// Gap between split panes.
-pub const SPLIT_GAP: Pixels = px(6.);
+/// Inset between a pane edge and its text, so text never touches a border.
+pub const PANE_INSET: Pixels = px(8.);
+/// Hairline between split panes at rest; panes touch the divider.
+pub const SPLIT_GAP: Pixels = px(1.);
+/// Width of the divider handle shown on hover and drag, centred on the hairline.
+pub const SPLIT_BAR: Pixels = px(2.);
+/// Grab area across a divider: wider than the gap so it is easy to hit.
+pub const SPLIT_HIT: Pixels = px(10.);
 pub const STRIP_WIDTH: Pixels = px(140.);
 /// Side tab list limits: at the minimum only a letter per tab is shown.
 pub const STRIP_MIN: Pixels = px(40.);
@@ -43,6 +49,8 @@ pub const STRIP_COMPACT: Pixels = px(72.);
 pub const CONTROL_SIZE: Pixels = px(24.);
 pub const CONTROL_GAP: Pixels = px(2.);
 pub const CONTENT_PADDING: Pixels = px(6.);
+/// Top inset of the content card, above the terminal panes.
+pub const CONTENT_TOP: Pixels = px(6.);
 
 /// Accent per tab, picked by tab id so neighbours differ.
 pub const TAB_COLORS: [u32; 8] = [

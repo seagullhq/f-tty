@@ -223,3 +223,29 @@ fn osc_7_path_keeps_spaces_and_decodes_percent() {
     emu.feed(b"\x1b]7;file://host/tmp/sp ace%2541\x07");
     assert_eq!(emu.term.cwd.as_deref(), Some("/tmp/sp ace%41"));
 }
+
+#[::core::prelude::v1::test]
+fn rotated_screen_keeps_row_order_through_scroll_resize_and_alt() {
+    let mut emu = Emulator::new(6, 3);
+    emu.feed(b"l1\r\nl2\r\nl3\r\nl4\r\nl5\r\nl6\r\n");
+    let term = &emu.term;
+    // Screen keeps the last two lines in order, then the blank cursor row.
+    assert_eq!(line_text(term.row(0)), "l5");
+    assert_eq!(line_text(term.row(1)), "l6");
+    assert_eq!(line_text(term.row(2)), "");
+    assert_eq!(term.history_len(), 4);
+    assert_eq!(line_text(term.line(0)), "l1");
+    // Writing after a rotation lands on the logical row.
+    emu.feed(b"\x1b[1;1Hx");
+    assert_eq!(line_text(emu.term.row(0)), "x5");
+    // Resizing keeps the rotated content in order.
+    emu.term.resize(6, 2);
+    assert_eq!(line_text(emu.term.row(0)), "x5");
+    assert_eq!(line_text(emu.term.row(1)), "l6");
+    // Entering and leaving the alternate screen returns the same text.
+    emu.feed(b"\x1b[?1049h\x1b[2Jalt\x1b[?1049l");
+    assert_eq!(line_text(emu.term.row(0)), "x5");
+    // Deleting the top line of a rotated screen shifts the rest up.
+    emu.feed(b"\x1b[1;1H\x1b[M");
+    assert_eq!(line_text(emu.term.row(0)), "l6");
+}

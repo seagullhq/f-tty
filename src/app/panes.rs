@@ -21,6 +21,13 @@ pub(crate) struct SplitDrag {
     min_b: f32,
 }
 
+impl SplitDrag {
+    /// Whether this drag is on the divider at `path` / `index`.
+    pub(crate) fn is_on(&self, path: &[usize], index: usize) -> bool {
+        self.index == index && self.path == path
+    }
+}
+
 /// Smallest pane: columns across, lines down.
 const MIN_COLS: f32 = 8.;
 const MIN_ROWS: f32 = 3.;

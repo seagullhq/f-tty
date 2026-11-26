@@ -3,6 +3,7 @@
 use crate::app::scrollbar::SETTINGS_SCROLLBAR_WIDTH;
 use crate::app::{TabPosition, TerminalView};
 use crate::terminal::DEFAULT_FG;
+use crate::ui::components::kbd_chord;
 use crate::ui::theme::{self, color_of};
 use gpui::prelude::FluentBuilder;
 use gpui::*;
@@ -19,18 +20,28 @@ const MOUSE_BINDS: &[(&str, &str)] = &[
 
 /// One shortcut row: same surface and radius as the other controls, with the
 /// keys in a badge like the tab labels.
-fn keybind_row(index: usize, label: &'static str, badge: impl IntoElement, capturing: bool) -> Div {
+fn keybind_row(
+    index: usize,
+    label: &'static str,
+    badge: impl IntoElement,
+    capturing: bool,
+    clickable: bool,
+) -> Stateful<Div> {
     div()
+        .id(("keybind-row", index))
         .flex()
         .items_center()
         .gap_3()
-        .min_h(px(28.))
+        .h(px(34.))
         .px(px(10.))
         .bg(color_of(if capturing {
             theme::ACTIVE
         } else {
             theme::CHROME
         }))
+        .when(clickable && !capturing, |d| {
+            d.hover(|s| s.bg(color_of(theme::HOVER)))
+        })
         .when(index > 0 && !capturing, |d| {
             d.border_t_1().border_color(color_of(theme::BORDER))
         })
@@ -48,6 +59,16 @@ fn keybind_row(index: usize, label: &'static str, badge: impl IntoElement, captu
 /// One row: label and hint on the left, control in a compact column.
 /// Rows are separated by a hairline.
 fn setting_row(label: &'static str, hint: &'static str, control: impl IntoElement) -> Div {
+    setting_row_in(label, hint, control, CONTROL_WIDTH)
+}
+
+/// `setting_row` with an explicit control column width.
+fn setting_row_in(
+    label: &'static str,
+    hint: &'static str,
+    control: impl IntoElement,
+    width: Pixels,
+) -> Div {
     div()
         .flex()
         .items_start()
@@ -68,7 +89,12 @@ fn setting_row(label: &'static str, hint: &'static str, control: impl IntoElemen
                         .text_color(color_of(DEFAULT_FG))
                         .child(label),
                 )
-                .child(div().text_color(color_of(theme::MUTED)).child(hint)),
+                .child(
+                    div()
+                        .whitespace_normal()
+                        .text_color(color_of(theme::MUTED))
+                        .child(hint),
+                ),
         )
         .child(
             div()
@@ -76,7 +102,7 @@ fn setting_row(label: &'static str, hint: &'static str, control: impl IntoElemen
                 .flex_col()
                 .flex_1()
                 .min_w(px(0.))
-                .max_w(CONTROL_WIDTH)
+                .max_w(width)
                 .child(control),
         )
 }
@@ -281,91 +307,57 @@ impl TerminalView {
             let badge = div()
                 .id(("keybind", i))
                 .flex_none()
-                .rounded(theme::CHIP_RADIUS)
-                .border_1()
-                .border_color(color_of(if capturing {
-                    theme::ACCENT
-                } else {
-                    theme::BORDER
-                }))
-                .bg(color_of(if capturing {
-                    theme::ACCENT
-                } else {
-                    theme::BADGE_BG
-                }))
-                .px(px(6.))
-                .py(px(2.))
-                .max_w(px(260.))
-                .truncate()
-                .text_color(color_of(if capturing {
-                    theme::BADGE_BG
-                } else {
-                    DEFAULT_FG
-                }))
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.start_rebind(i, window, cx);
                 }))
-                .child(keys);
-            shortcuts = shortcuts.child(keybind_row(i, binding.label, badge, capturing));
+                .child(if capturing {
+                    div()
+                        .px(px(6.))
+                        .py(px(2.))
+                        .rounded(theme::CHIP_RADIUS)
+                        .bg(color_of(theme::ACCENT))
+                        .text_xs()
+                        .text_color(color_of(theme::BADGE_BG))
+                        .child("Press keys…")
+                } else {
+                    kbd_chord(&keys)
+                });
+            shortcuts = shortcuts.child(keybind_row(i, binding.label, badge, capturing, true));
         }
         for (i, (label, keys)) in MOUSE_BINDS.iter().enumerate() {
             let index = self.keybinds.entries().len() + i;
             let badge = div()
                 .flex_none()
-                .rounded(theme::CHIP_RADIUS)
-                .border_1()
-                .border_color(color_of(theme::BORDER))
-                .bg(color_of(theme::BADGE_BG))
-                .px(px(6.))
-                .py(px(2.))
+                .text_xs()
                 .text_color(color_of(theme::MUTED))
                 .child(*keys);
-            shortcuts = shortcuts.child(keybind_row(index, *label, badge, false));
+            shortcuts = shortcuts.child(keybind_row(index, *label, badge, false, false));
         }
-        view = view
-            .child(
-                div()
-                    .pt(px(20.))
-                    .pb(px(2.))
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(2.))
-                            .h(px(12.))
-                            .rounded(px(1.))
-                            .bg(color_of(theme::ACCENT)),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(color_of(DEFAULT_FG))
-                            .child("Keyboard shortcuts"),
-                    )
-                    .child(div().flex_1())
-                    .child(
-                        div()
-                            .id("keybinds-reset")
-                            .text_xs()
-                            .text_color(color_of(theme::MUTED))
-                            .cursor_pointer()
-                            .hover(|s| s.text_color(color_of(DEFAULT_FG)))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.reset_keybinds(cx);
-                            }))
-                            .child("Reset defaults"),
-                    ),
-            )
-            .child(
-                div()
-                    .pb(px(8.))
-                    .text_color(color_of(theme::MUTED))
-                    .child("Click a key to rebind, Esc cancels. Mouse actions are fixed."),
-            )
+
+        let reset = div()
+            .id("keybinds-reset")
+            .text_xs()
+            .text_color(color_of(theme::MUTED))
+            .cursor_pointer()
+            .hover(|s| s.text_color(color_of(DEFAULT_FG)))
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.reset_keybinds(cx);
+            }))
+            .child("Reset defaults");
+        let control = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(div().flex().justify_end().child(reset))
             .child(shortcuts);
+        view = view.child(setting_row_in(
+            "Keyboard shortcuts",
+            "Click a key to rebind. Esc cancels. Mouse actions are fixed.",
+            control,
+            px(520.),
+        ));
 
         let mut root = div()
             .id("settings-root")

@@ -124,7 +124,7 @@ fn selection_text(term: &Term, anchor: (usize, usize), cursor: (usize, usize)) -
         (cursor, anchor)
     };
     let start_index = start.0 * term.cols + start.1;
-    let end_index = (end.0 * term.cols + end.1).min(term.cells.len().saturating_sub(1));
+    let end_index = (end.0 * term.cols + end.1).min((term.rows * term.cols).saturating_sub(1));
     if start_index > end_index {
         return String::new();
     }
@@ -139,7 +139,7 @@ fn selection_text(term: &Term, anchor: (usize, usize), cursor: (usize, usize)) -
             line.clear();
             row = r;
         }
-        line.push(term.cells[index].ch);
+        line.push(term.row(index / term.cols)[index % term.cols].ch);
     }
     text.push_str(line.trim_end());
     text
@@ -161,11 +161,10 @@ mod tests {
 
     #[::core::prelude::v1::test]
     fn selection_text_joins_rows() {
-        let mut term = Term::new(4, 3);
-        for (cell, ch) in term.cells.iter_mut().zip("abcdefghijkl".chars()) {
-            cell.ch = ch;
-        }
-        assert_eq!(selection_text(&term, (0, 1), (1, 2)), "bcd\nefg");
-        assert_eq!(selection_text(&term, (2, 2), (1, 1)), "fgh\nijk");
+        let mut emu = crate::terminal::Emulator::new(4, 3);
+        emu.feed(b"abcd\r\nefgh\r\nijkl");
+        let term = &emu.term;
+        assert_eq!(selection_text(term, (0, 1), (1, 2)), "bcd\nefg");
+        assert_eq!(selection_text(term, (2, 2), (1, 1)), "fgh\nijk");
     }
 }

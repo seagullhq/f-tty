@@ -30,6 +30,9 @@ use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 use tree::Tree;
 
+/// Output bytes parsed per pane per tick (about 512 KiB, roughly 20 ms of parsing).
+const PUMP_BUDGET: usize = 512 * 1024;
+
 /// A finished command pops a notification only if it ran at least this long.
 const NOTIFY_AFTER: Duration = Duration::from_secs(5);
 
@@ -265,6 +268,12 @@ pub(crate) struct TerminalView {
     pub(crate) split_drag: Option<panes::SplitDrag>,
     /// Every shell ended: the window closes on the next render.
     pub(crate) quit: bool,
+    /// Last key typed into a pane: the pump wakes fast right after it.
+    pub(crate) last_input: Option<Instant>,
+    /// Pump ticks in a row without output.
+    pub(crate) pump_quiet: u32,
+    /// Some pane still has queued output beyond this tick's budget.
+    pub(crate) pump_backlog: bool,
     /// The scrollbar thumb is being dragged.
     pub(crate) scrollbar_drag: bool,
     /// Scrollback search bar, when open.
@@ -306,11 +315,15 @@ impl TerminalView {
         .or_else(|| shells::default_shell(&shells))
         .expect("no shell available");
 
-        // Single timer for pumping output: no blocked UI threads.
+        // Single timer for pumping output: no blocked UI threads. Its period
+        // depends on what is happening (see `pump_poll_ms`).
         cx.spawn(async move |this, cx| {
             loop {
+                let Ok(poll) = this.update(cx, |view, _| view.pump_poll_ms()) else {
+                    break;
+                };
                 cx.background_executor()
-                    .timer(Duration::from_millis(8))
+                    .timer(Duration::from_millis(poll))
                     .await;
                 if this.update(cx, |view, cx| view.pump(cx)).is_err() {
                     break;
@@ -349,6 +362,9 @@ impl TerminalView {
             selecting: false,
             split_drag: None,
             quit: false,
+            last_input: None,
+            pump_quiet: 0,
+            pump_backlog: false,
             scrollbar_drag: false,
             search: None,
             mouse_reported: false,
@@ -454,7 +470,26 @@ impl TerminalView {
     }
 
     /// Drains chunks from all panes and notifies on output or title changes.
-    fn pump(&mut self, cx: &mut Context<Self>) {
+    /// Pump period in ms: 1 ms right after a key or while output is queued,
+    /// 8 ms while output flows, 25 ms once the terminal has been quiet for
+    /// about 1.2 s.
+    pub(crate) fn pump_poll_ms(&self) -> u64 {
+        let typing = self
+            .last_input
+            .is_some_and(|t| t.elapsed() < Duration::from_millis(300));
+        if typing || self.pump_backlog {
+            1
+        } else if self.pump_quiet < 150 {
+            8
+        } else {
+            25
+        }
+    }
+
+    /// Returns true when any pane produced output (or an event) this tick.
+    fn pump(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut any = false;
+        let mut backlog_any = false;
         let mut active_received = false;
         let mut title_changed = false;
         let window_away = cx.active_window().is_none();
@@ -474,10 +509,20 @@ impl TerminalView {
                 let history_before = pane.emu.term.history_len();
                 let mut dsr: Option<Vec<u8>> = None;
                 let mut gone = false;
+                let mut taken = 0usize;
+                let mut backlog = false;
                 if let Some(pty) = &pane.pty {
                     loop {
+                        // Budget per tick: a flood of output must not hold the
+                        // UI thread; the rest waits for the next tick, which
+                        // renders in between.
+                        if taken >= PUMP_BUDGET {
+                            backlog = true;
+                            break;
+                        }
                         match pty.rx.try_recv() {
                             Ok(chunk) => {
+                                taken += chunk.len();
                                 pane.emu.feed(&chunk);
                                 if pane.emu.term.dsr_pending {
                                     pane.emu.term.dsr_pending = false;
@@ -497,7 +542,9 @@ impl TerminalView {
                 }
                 // ConPTY keeps its output pipe open after the shell exits, so
                 // EOF alone never arrives on Windows. Poll the child process.
-                if !gone {
+                backlog_any |= backlog;
+                // Output still queued after an exit must be shown first.
+                if !gone && !backlog {
                     if let Some(pty) = &mut pane.pty {
                         if pty.exit_status().is_some() {
                             gone = true;
@@ -572,14 +619,24 @@ impl TerminalView {
             if !hidden {
                 *attention = false;
             }
+            if received {
+                any = true;
+            }
             if received && i == self.active {
                 active_received = true;
             }
         }
+        self.pump_backlog = backlog_any;
+        self.pump_quiet = if any {
+            0
+        } else {
+            self.pump_quiet.saturating_add(1)
+        };
         let closed = self.close_exited();
         if active_received || title_changed || closed {
             cx.notify();
         }
+        any
     }
 
     /// Drops panes whose shell ended, then tabs left empty; the window
@@ -714,8 +771,12 @@ impl TerminalView {
             };
             pane.origin = point(px(x), px(y));
             pane.area = size(px(w), px(h));
-            let cols = ((pane.area.width / cell).floor() as usize).max(1);
-            let rows = ((pane.area.height / line).floor() as usize).max(1);
+            let inner = size(
+                pane.area.width - theme::PANE_INSET * 2.,
+                pane.area.height - theme::PANE_INSET * 2.,
+            );
+            let cols = ((inner.width / cell).floor() as usize).max(1);
+            let rows = ((inner.height / line).floor() as usize).max(1);
             if pane.emu.term.cols == cols && pane.emu.term.rows == rows {
                 continue;
             }

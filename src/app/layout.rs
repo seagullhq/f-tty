@@ -7,19 +7,26 @@ use gpui::*;
 
 impl TerminalView {
     /// Where the focused pane's first cell is (window coordinates).
+    /// Where the focused pane's text starts (its origin plus the inset).
     pub(crate) fn text_origin(&self) -> Point<Pixels> {
+        self.pane_origin() + point(theme::PANE_INSET, theme::PANE_INSET)
+    }
+
+    /// Top-left of the focused pane's box, without the inset.
+    pub(crate) fn pane_origin(&self) -> Point<Pixels> {
         self.tabs
             .get(self.active)
-            .map_or(self.content_origin(), |t| t.origin)
+            .and_then(|t| t.panes.get(t.focus))
+            .map_or(self.content_origin(), |p| p.origin)
     }
 
     /// Top-left of the terminal area, before panes are placed in it.
     pub(crate) fn content_origin(&self) -> Point<Pixels> {
-        let mut x = theme::GAP + px(1.) + theme::CONTENT_PADDING;
+        let mut x = theme::GAP + px(1.);
         if self.tabs_position == TabPosition::Left {
             x += self.strip_width + theme::GAP;
         }
-        point(x, theme::BAR_HEIGHT + px(1.) + px(2.))
+        point(x, theme::BAR_HEIGHT + px(1.))
     }
 
     pub(crate) fn terminal_area(&self, window: &Window) -> Size<Pixels> {
@@ -29,14 +36,8 @@ impl TerminalView {
             TabPosition::Bottom => (px(0.), theme::TAB_HEIGHT + theme::GAP),
             TabPosition::Left | TabPosition::Right => (self.strip_width + theme::GAP, px(0.)),
         };
-        let width = bounds.width - theme::GAP * 2. - strip_w - px(2.) - theme::CONTENT_PADDING * 2.;
-        let height = bounds.height
-            - theme::BAR_HEIGHT
-            - theme::GAP
-            - strip_h
-            - px(2.)
-            - px(2.)
-            - theme::CONTENT_PADDING;
+        let width = bounds.width - theme::GAP * 2. - strip_w - px(2.);
+        let height = bounds.height - theme::BAR_HEIGHT - theme::GAP - strip_h - px(2.);
         size(
             if width > px(1.) { width } else { px(1.) },
             if height > px(1.) { height } else { px(1.) },

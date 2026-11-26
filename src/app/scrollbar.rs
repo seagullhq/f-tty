@@ -99,7 +99,7 @@ impl TerminalView {
     pub(crate) fn scrollbar_to(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         let term = &self.tabs[self.active].emu.term;
         let track = f32::from(self.line_height * term.rows as f32);
-        let y = f32::from(position.y - self.text_origin().y).clamp(0., track);
+        let y = f32::from(position.y - self.pane_origin().y).clamp(0., track);
         let scroll = scroll_for(y, track, term.rows, term.history_len());
         let tab = &mut self.tabs[self.active];
         if tab.scroll != scroll {
